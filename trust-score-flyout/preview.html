@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trust Score Flyout — Preview</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0;
+      font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #eaf1fb, transparent),
+                  linear-gradient(180deg, #f4f7fb, #e9eef5);
+      color: #22303e;
+      min-height: 100vh;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: radial-gradient(1200px 600px at 20% -10%, #1b2632, transparent),
+                        linear-gradient(180deg, #131a22, #0e141b); color: #dde6ef; }
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    p.sub { margin: 0 0 28px; opacity: .7; font-size: 14px; }
+    .toolbar {
+      display: flex; align-items: center; gap: 14px;
+      background: rgba(127,127,127,.08);
+      border: 1px solid rgba(127,127,127,.18);
+      border-radius: 14px; padding: 12px 16px; backdrop-filter: blur(6px);
+    }
+    .toolbar .spacer { flex: 1; }
+    .cell {
+      width: 52px; height: 44px; display: flex; align-items: center; justify-content: center;
+      border-radius: 10px;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0; }
+    .controls label { font-size: 13px; display: inline-flex; gap: 6px; align-items: center;
+      background: rgba(127,127,127,.08); border: 1px solid rgba(127,127,127,.18);
+      padding: 6px 10px; border-radius: 10px; }
+    .note { font-size: 13px; opacity: .7; line-height: 1.6; margin-top: 24px; }
+    select { font: inherit; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Trust Score Flyout</h1>
+    <p class="sub">Live preview running the real extension component in <b>demo-data</b> mode. Click the icon.
+      Demo data includes transformation warnings (⚠ / ●) and dataset links.</p>
+
+    <div class="toolbar">
+      <strong style="font-size:14px;">Dashboard header</strong>
+      <div class="spacer"></div>
+      <div class="cell" id="host"></div>
+    </div>
+
+    <div class="controls">
+      <label>Icon
+        <select id="icon">
+          <option value="search">search (default)</option>
+          <option value="shield">shield</option>
+          <option value="gauge">gauge</option>
+          <option value="star">star</option>
+          <option value="database">database</option>
+          <option value="chart">chart</option>
+          <option value="tag">tag</option>
+          <option value="info">info</option>
+          <option value="sparkle">sparkle</option>
+        </select>
+      </label>
+      <label>Style
+        <select id="style">
+          <option value="bare">bare</option>
+          <option value="chip">chip</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="sort">
+          <option value="scoreDesc">score high→low</option>
+          <option value="scoreAsc">score low→high</option>
+          <option value="name">name</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="note">
+      This file is for local design review only. It loads <code>lib/component.js</code> and its
+      dependencies via RequireJS in <code>demo</code> mode (no Qlik runtime needed). The packaged
+      extension uses the same component against live Qlik Cloud Trust Scores.
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
+  <script>
+    require.config({ baseUrl: "./" });
+    require(["lib/component"], function (Component) {
+      var host = document.getElementById("host");
+      var comp = new Component(host);
+
+      function render() {
+        comp.update({
+          title: "Trust Scores",
+          iconMode: "builtin",
+          iconBuiltin: document.getElementById("icon").value,
+          triggerStyle: document.getElementById("style").value,
+          iconSize: 28,
+          demo: true,
+          scope: "appLineage",
+          sort: document.getElementById("sort").value,
+          maxItems: 20
+        });
+      }
+      ["icon", "style", "sort"].forEach(function (id) {
+        document.getElementById(id).addEventListener("change", render);
+      });
+      render();
+    });
+  </script>
+</body>
+</html>

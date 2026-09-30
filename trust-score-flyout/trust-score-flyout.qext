@@ -1,0 +1,13 @@
+{
+  "name": "Trust Score Flyout",
+  "description": "An icon that reveals a modern, animated flyout of Qlik Cloud dataset Trust Scores, with drill-down breakdown, axis weights and dataset descriptions.",
+  "icon": "extension",
+  "type": "visualization",
+  "version": "1.0.0",
+  "author": "Guy Meintjes",
+  "keywords": "qlik-cloud, trust-score, data-governance, data-quality, kpi",
+  "supernova": false,
+  "dependencies": {
+    "qlik-sense": ">=14.0.0"
+  }
+}
