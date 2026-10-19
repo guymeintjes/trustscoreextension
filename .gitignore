@@ -1,6 +1,9 @@
 # Build artifacts — regenerate by zipping the trust-score-flyout/ folder
 /*.zip
 
+# Claude Code local settings, kept on this machine
+.claude/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
