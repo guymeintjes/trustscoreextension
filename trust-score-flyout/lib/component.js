@@ -485,6 +485,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     if (!this.state.open && !this.panel) return;
     this.state.open = false;
     this.state.selectedId = null;
+    this._side = null;
     this.trigger.setAttribute("aria-expanded", "false");
     this.trigger.classList.remove("is-active");
 
@@ -525,8 +526,11 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     this._closePanel();
   };
 
-  Component.prototype._onReposition = function () {
+  Component.prototype._onReposition = function (e) {
     if (!this.state.open || this._repositionQueued) return;
+    // Scrolling inside the flyout (the tile row, a long drill-down) doesn't
+    // move the button, so it needs no re-measuring.
+    if (e && e.target && e.target !== document && this.panel && this.panel.contains(e.target)) return;
     var self = this;
     this._repositionQueued = true;
     requestAnimationFrame(function () {
@@ -571,40 +575,178 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     panel.appendChild(inner);
     panel.appendChild(h("div", "tsf-arrow"));
     this.panel = panel;
+    this.panelInner = inner;
+    this.panelBody = body;
   };
 
   Component.prototype._positionPanel = function () {
     if (!this.panel) return;
-    var r = this.trigger.getBoundingClientRect();
-    var vw = window.innerWidth;
-    var vh = window.innerHeight;
-    var margin = 8;
+    var panel = this.panel;
+    var inner = this.panelInner;
+    var body = this.panelBody;
+    var t = this.trigger.getBoundingClientRect();
 
-    // Let the panel size to its content first, then clamp.
-    this.panel.style.maxWidth = Math.min(560, vw - margin * 2) + "px";
-    var pr = this.panel.getBoundingClientRect();
-    var pw = pr.width || 360;
-    var ph = pr.height || 200;
+    // Natural size at a given width. Layout sizes, not transformed ones, so the
+    // opening scale animation can't skew it; the body's content height is read
+    // through any scroll constraint, so measuring never resets its scroll.
+    function size(maxW) {
+      panel.style.left = "0px";
+      panel.style.top = "0px";
+      panel.style.maxWidth = maxW + "px";
+      var w = panel.offsetWidth || 360;
+      var h = inner && body ? inner.offsetHeight - body.clientHeight + body.scrollHeight : panel.offsetHeight;
+      return { w: w, h: h || 200 };
+    }
 
-    // Horizontal: align panel centre-ish to the trigger, clamped to viewport.
-    var left = r.left + r.width / 2 - pw / 2;
-    left = Math.max(margin, Math.min(left, vw - pw - margin));
+    var spot = place(t, size, window.innerWidth, window.innerHeight, this._side);
+    this._side = spot.overlap ? null : spot.side;
 
-    // Vertical: prefer below the trigger; flip above if it won't fit.
-    var below = r.bottom + 10;
-    var placeAbove = below + ph > vh - margin && r.top - 10 - ph > margin;
-    var top = placeAbove ? r.top - 10 - ph : below;
-    top = Math.max(margin, Math.min(top, vh - ph - margin));
-
-    this.panel.classList.toggle("tsf-above", placeAbove);
-    this.panel.style.left = Math.round(left) + "px";
-    this.panel.style.top = Math.round(top) + "px";
-
-    // Arrow points at the trigger centre.
-    var arrowX = r.left + r.width / 2 - left;
-    arrowX = Math.max(16, Math.min(arrowX, pw - 16));
-    this.panel.style.setProperty("--tsf-arrow-x", Math.round(arrowX) + "px");
+    panel.style.maxWidth = spot.maxWidth + "px";
+    if (inner) inner.style.maxHeight = spot.maxHeight ? spot.maxHeight + "px" : "";
+    panel.style.left = Math.round(spot.left) + "px";
+    panel.style.top = Math.round(spot.top) + "px";
+    ["bottom", "top", "right", "left"].forEach(function (s) {
+      panel.classList.toggle("tsf-side-" + s, s === spot.side);
+    });
+    panel.classList.toggle("tsf-overlap", !!spot.overlap);
+    if (spot.arrow) {
+      panel.style.setProperty("--tsf-arrow-x", Math.round(spot.arrow.x) + "px");
+      panel.style.setProperty("--tsf-arrow-y", Math.round(spot.arrow.y) + "px");
+      // Open and close from the pointer, so the panel grows out of the button.
+      panel.style.transformOrigin = Math.round(spot.arrow.x) + "px " + Math.round(spot.arrow.y) + "px";
+    } else {
+      panel.style.transformOrigin = "50% 0";
+    }
+    this._revealSelected();
   };
+
+  /** Keep the selected card in view when the panel narrows or moves. */
+  Component.prototype._revealSelected = function () {
+    var id = this.state.selectedId;
+    var k = this.kpis;
+    if (!id || !k) return;
+    var cards = k.querySelectorAll(".tsf-kpi");
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute("data-id") !== id) continue;
+      var start = cards[i].offsetLeft - k.offsetLeft;
+      var end = start + cards[i].offsetWidth;
+      if (start < k.scrollLeft) k.scrollLeft = Math.max(0, start - 8);
+      else if (end > k.scrollLeft + k.clientWidth) k.scrollLeft = end - k.clientWidth + 8;
+      return;
+    }
+  };
+
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(v, hi));
+  }
+
+  /**
+   * Where the flyout goes. Pure geometry, so it can be tested on its own.
+   *   t       the button's rect { left, top, right, bottom }
+   *   size    function (maxWidth) -> { w, h }: the panel's natural size
+   *   vw, vh  the viewport
+   *   prev    the side used last time, kept while it still fits so the panel
+   *           doesn't jump around as its content changes
+   * Rules: never cover the button while any side has usable room. Prefer a
+   * side where everything fits: above or below first (whichever has more
+   * room, so later growth fits too), then right or left. If nothing fits,
+   * take the usable side that shows the most of the panel (by area) and let
+   * it scroll; the current side is kept unless another shows a lot more, so
+   * the panel doesn't jump for a small gain. Only with no usable room
+   * anywhere does it overlap, and then without a pointer.
+   * The pointer sits on the edge facing the button, at the point of that
+   * edge closest to the button's centre, clear of the rounded corners.
+   * Returns { side, left, top, maxWidth, maxHeight, arrow: {x, y}|null, overlap }.
+   */
+  function place(t, size, vw, vh, prev) {
+    var M = 8; // viewport margin
+    var GAP = 14; // button to panel edge; the pointer lives here
+    var MIN_H = 180; // least useful height above or below
+    var MIN_W = 300; // least useful width to the side
+    var AR = 22; // pointer stays this far from a corner
+    var cx = (t.left + t.right) / 2;
+    var cy = (t.top + t.bottom) / 2;
+    var fullW = Math.max(160, Math.min(560, vw - 2 * M));
+    var nat = size(fullW);
+    var space = {
+      bottom: vh - M - t.bottom - GAP,
+      top: t.top - GAP - M,
+      right: vw - M - t.right - GAP,
+      left: t.left - GAP - M
+    };
+    function vertical(s) {
+      return s === "bottom" || s === "top";
+    }
+    function fits(s) {
+      return vertical(s) ? space[s] >= nat.h : space[s] >= nat.w && vh - 2 * M >= nat.h;
+    }
+    function usable(s) {
+      return vertical(s) ? space[s] >= MIN_H : space[s] >= MIN_W;
+    }
+    function roomiest(list) {
+      return list.reduce(function (best, s) {
+        return !best || space[s] > space[best] ? s : best;
+      }, null);
+    }
+
+    // How much of the panel a side can show, in square pixels. Beside the
+    // button the panel may be narrowed, which makes it taller.
+    function shown(s) {
+      if (vertical(s)) return nat.w * Math.min(nat.h, space[s]);
+      var w = Math.min(nat.w, space[s]);
+      var h = w < nat.w ? size(Math.floor(w)).h : nat.h;
+      return w * Math.min(h, vh - 2 * M);
+    }
+
+    var side = prev && fits(prev) ? prev : null;
+    if (!side) side = roomiest(["bottom", "top"].filter(fits));
+    if (!side) side = roomiest(["right", "left"].filter(fits));
+    if (!side) {
+      var areas = {};
+      var best = null;
+      ["bottom", "top", "right", "left"].filter(usable).forEach(function (s) {
+        areas[s] = shown(s);
+        if (!best || areas[s] > areas[best]) best = s;
+      });
+      // Stay put unless another side shows clearly more (a quarter or better).
+      side = prev && areas[prev] !== undefined && areas[prev] >= 0.75 * areas[best] ? prev : best;
+    }
+
+    var left, top, w, h, maxW = fullW, maxH = null;
+    if (!side) {
+      // No usable room anywhere: overlap, kept inside the viewport.
+      var below = space.bottom >= space.top;
+      h = Math.min(nat.h, vh - 2 * M);
+      if (nat.h > h) maxH = h;
+      left = clamp(cx - nat.w / 2, M, vw - M - nat.w);
+      top = clamp(below ? t.bottom + GAP : t.top - GAP - h, M, vh - M - h);
+      return { side: below ? "bottom" : "top", overlap: true, left: left, top: top,
+        maxWidth: maxW, maxHeight: maxH, arrow: null };
+    }
+
+    if (vertical(side)) {
+      w = nat.w;
+      h = Math.min(nat.h, space[side]);
+      if (nat.h > h) maxH = h;
+      left = clamp(cx - w / 2, M, vw - M - w);
+      top = side === "bottom" ? t.bottom + GAP : t.top - GAP - h;
+      return { side: side, overlap: false, left: left, top: top, maxWidth: maxW, maxHeight: maxH,
+        arrow: { x: clamp(cx - left, AR, w - AR), y: side === "bottom" ? 0 : h } };
+    }
+
+    var n = nat;
+    if (nat.w > space[side]) {
+      maxW = Math.floor(space[side]);
+      n = size(maxW);
+    }
+    w = Math.min(n.w, maxW);
+    h = Math.min(n.h, vh - 2 * M);
+    if (n.h > h) maxH = h;
+    left = side === "right" ? t.right + GAP : t.left - GAP - w;
+    top = clamp(cy - h / 2, M, vh - M - h);
+    return { side: side, overlap: false, left: left, top: top, maxWidth: maxW, maxHeight: maxH,
+      arrow: { x: side === "right" ? 0 : w, y: clamp(cy - top, AR, h - AR) } };
+  }
 
   // ---------------------------------------------------------------------------
   // Data
@@ -1304,6 +1446,8 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       window.localStorage.removeItem(HINT_KEY);
     } catch (e) { /* nothing stored */ }
   };
+
+  Component.place = place;
 
   return Component;
 });

@@ -127,29 +127,27 @@ body.qv-theme-dark .tsf-panel,
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   opacity: 0;
-  transform: translateY(-8px) scale(0.96);
-  transform-origin: top center;
+  /* Slides in from the button's direction (set per side below) and grows
+     out of the pointer (transform-origin is set from script). */
+  transform: translate(var(--tsf-shift-x, 0px), var(--tsf-shift-y, -8px)) scale(0.96);
+  transform-origin: 50% 0;
   transition: opacity 0.26s var(--tsf-ease), transform 0.3s var(--tsf-ease);
   will-change: transform, opacity;
   pointer-events: none;
 }
 .tsf-panel.is-open {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: none;
   pointer-events: auto;
 }
 .tsf-panel.is-closing {
   opacity: 0;
-  transform: translateY(-6px) scale(0.97);
+  transform: translate(var(--tsf-shift-x, 0px), var(--tsf-shift-y, -6px)) scale(0.97);
   pointer-events: none;
 }
-.tsf-panel.tsf-above {
-  transform-origin: bottom center;
-  transform: translateY(8px) scale(0.96);
-}
-.tsf-panel.tsf-above.is-open {
-  transform: translateY(0) scale(1);
-}
+.tsf-side-top { --tsf-shift-x: 0px; --tsf-shift-y: 8px; }
+.tsf-side-right { --tsf-shift-x: -8px; --tsf-shift-y: 0px; }
+.tsf-side-left { --tsf-shift-x: 8px; --tsf-shift-y: 0px; }
 
 .tsf-panel-inner {
   background: var(--tsf-bg);
@@ -158,32 +156,58 @@ body.qv-theme-dark .tsf-panel,
   box-shadow: var(--tsf-shadow);
   overflow: hidden;
   backdrop-filter: saturate(1.1);
+  display: flex;
+  flex-direction: column;
 }
 
-/* Arrow */
+/* Arrow: on whichever edge faces the button, at the point of that edge
+   closest to it (--tsf-arrow-x / --tsf-arrow-y are set from script). */
 .tsf-arrow {
   position: absolute;
-  top: -7px;
-  left: var(--tsf-arrow-x, 50%);
   width: 14px;
   height: 14px;
-  margin-left: -7px;
   background: var(--tsf-bg);
-  border-left: 1px solid var(--tsf-border);
-  border-top: 1px solid var(--tsf-border);
+  border: 0 solid var(--tsf-border);
   transform: rotate(45deg);
+}
+.tsf-side-bottom .tsf-arrow {
+  top: -7px;
+  left: var(--tsf-arrow-x, 50%);
+  margin-left: -7px;
+  border-top-width: 1px;
+  border-left-width: 1px;
   border-radius: 3px 0 0 0;
 }
-.tsf-above .tsf-arrow {
-  top: auto;
+.tsf-side-top .tsf-arrow {
   bottom: -7px;
-  border: none;
-  border-right: 1px solid var(--tsf-border);
-  border-bottom: 1px solid var(--tsf-border);
+  left: var(--tsf-arrow-x, 50%);
+  margin-left: -7px;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+  border-radius: 0 0 3px 0;
 }
+.tsf-side-right .tsf-arrow {
+  left: -7px;
+  top: var(--tsf-arrow-y, 50%);
+  margin-top: -7px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+  border-radius: 0 0 0 3px;
+}
+.tsf-side-left .tsf-arrow {
+  right: -7px;
+  top: var(--tsf-arrow-y, 50%);
+  margin-top: -7px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+  border-radius: 0 3px 0 0;
+}
+/* Overlapping the button (no room anywhere): a pointer would point at nothing. */
+.tsf-overlap .tsf-arrow { display: none; }
 
 /* Header */
 .tsf-panel-header {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -217,7 +241,14 @@ body.qv-theme-dark .tsf-panel,
 .tsf-refresh:active { transform: rotate(-180deg); }
 
 /* Body */
-.tsf-body { padding: 6px; }
+.tsf-body {
+  padding: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
 
 /* ---- KPI list (horizontal) ------------------------------------------ */
 .tsf-kpis {

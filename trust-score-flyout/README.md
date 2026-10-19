@@ -57,9 +57,11 @@ browser. It runs the real component on sample data, no tenant required.
   combined with other data, values recalculated, used only as a lookup, or not
   kept at all. The card gets an info, warning or critical glyph, and the
   drill-down explains why.
-- **Well behaved.** Closes on click-out, repositions on scroll and resize, flips
-  above the button when there's no room below, and renders at `<body>` level so the
-  Qlik object never clips it.
+- **Beside the button, never on top of it.** The flyout opens below, above, right
+  or left of the button, wherever it fits best, and its pointer always sits at the
+  point closest to the button. It closes on click-out, follows the button as the
+  sheet scrolls or resizes, and renders at `<body>` level so the Qlik object never
+  clips it.
 - **Demo mode.** Preview the whole thing with sample data before you point it at a
   live tenant.
 
@@ -110,6 +112,22 @@ It's light on Qlik by design:
   and limited to a few a minute. Run or schedule checks from the catalog.
 - **Honest when there's nothing to show.** If no field-level check has run, or the
   viewer can't read it, the tab says so instead of showing empty bars.
+
+## Where the flyout opens
+
+The flyout works out where to open each time, from the button's position and the
+room around it:
+
+- **Where everything fits.** Below or above first, whichever has more room, so
+  the drill-down has space to grow. Failing that, to the right or left.
+- **When nothing fits,** on the side that shows the most of it, and the panel
+  scrolls. The header stays put, and so does the side the flyout is on unless
+  another shows clearly more, so it doesn't jump about as you click.
+- **Never over the button**, unless there's no usable room on any side at all (a
+  tiny window). Only then does it overlap, and without a pointer, since there's
+  nothing to point at.
+- **The pointer** sits on the edge facing the button, at the point on that edge
+  closest to the button's centre, and the flyout grows out of it as it opens.
 
 ## When a viewer can't see Trust Scores
 
