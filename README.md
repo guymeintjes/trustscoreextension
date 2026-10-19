@@ -1,28 +1,34 @@
-# Trust Score Extension for Qlik Cloud
+# Trust Score Flyout for Qlik Cloud
 
-A Qlik Cloud (client-managed) visualization extension that surfaces **Data
-Governance Trust Scores** for the datasets in an app. It appears as a
-customisable icon; clicking it opens an animated flyout of dataset trust-score
-KPIs, each of which drills down into the axis breakdown, weights, a dataset
-deep-link, and a best-effort **transformation warning** when the app's load
-script reshapes the source.
+Ever looked at a dashboard and wondered how much you should believe it? This
+extension puts the answer one click away.
 
-The extension lives in [`trust-score-flyout/`](trust-score-flyout/) — see its
-[README](trust-score-flyout/README.md) for features, the APIs it uses, the
-properties panel, and install steps.
+It's a small Qlik Cloud visualization extension that lives quietly on a sheet as a
+button. Click it and an animated flyout slides out showing the **Trust Score** that
+Qlik Cloud Data Governance has computed for each dataset the app uses. Click a
+dataset and you get the full picture: how it scores on each axis, how much each
+axis counts, a link straight to the dataset, and a heads-up when the app's load
+script reshapes the source enough that the score might not tell the whole story.
 
-## Quick start
+If you'd rather not click at all, the button can show the **aggregate Trust Score**
+across all the datasets, drawn as the same colour-banded ring the flyout uses.
+
+How it works, which APIs it calls and how to configure it all live in the
+[extension's own README](trust-score-flyout/README.md).
+
+## Try it in a couple of minutes
 
 1. Zip the [`trust-score-flyout/`](trust-score-flyout/) folder.
-2. In Qlik Cloud: **Administration → Extensions → Add** and upload the zip.
-3. Drag **Trust Score Flyout** onto a sheet and configure it in the properties
-   panel.
+2. In Qlik Cloud, go to **Administration → Extensions → Add** and upload the zip.
+3. Edit a sheet, drag **Trust Score Flyout** on from Custom objects, and pick your
+   settings in the properties panel.
 
-Prefer a local look first? Open
-[`trust-score-flyout/preview.html`](trust-score-flyout/preview.html) in a browser
-— it runs the real component on demo data, no tenant required.
+Want a look before you install anything? Open
+[`trust-score-flyout/preview.html`](trust-score-flyout/preview.html) in a browser.
+It runs the real component on sample data, no tenant needed.
 
-## Requirements
+## What you'll need
 
-- Qlik Cloud tenant with Trust Scores (Data Governance).
-- Signed-in user permissions: `dataset:read`, `dataquality:read`.
+- A Qlik Cloud tenant with Trust Scores switched on (part of Data Governance).
+- Whoever views the sheet needs permission to read datasets and data quality:
+  `dataset:read` and `dataquality:read`.

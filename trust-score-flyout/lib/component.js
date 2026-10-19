@@ -1,9 +1,13 @@
 /**
  * component.js
- * The interactive UI. Owns the trigger icon (rendered inside the Qlik object)
+ * The interactive UI. Owns the trigger button (rendered inside the Qlik object)
  * and a body-level flyout panel (so it can overflow the object bounds without
  * being clipped). Manages open/close, data loading, the horizontal KPI list and
  * the animated drill-down detail view.
+ *
+ * The trigger is either an icon or, in "score" mode, a ring showing the
+ * aggregate Trust Score across every scored dataset in scope. Score mode needs
+ * data before the panel is ever opened, so it loads on first paint.
  *
  * One instance lives per extension object and persists across repaints, so
  * open/selection state and running animations survive Qlik re-rendering.
@@ -12,6 +16,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   "use strict";
 
   var uid = 0;
+  var BANDS = ["high", "mid", "low", "poor", "na"];
 
   function h(tag, cls, html) {
     var el = document.createElement(tag);
@@ -28,6 +33,23 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     return "poor";
   }
 
+  /** Swap the tsf-band--* class on an element (null clears it). */
+  function setBand(el, band) {
+    BANDS.forEach(function (b) {
+      el.classList.remove("tsf-band--" + b);
+    });
+    if (band) el.classList.add("tsf-band--" + band);
+  }
+
+  // Score ring geometry (shared by the KPI cards and the score trigger).
+  var RING_R = 26;
+  var RING_C = 2 * Math.PI * RING_R;
+
+  function ringDash(score) {
+    var pct = Math.max(0, Math.min(100, score || 0));
+    return ((pct / 100) * RING_C).toFixed(1) + " " + RING_C.toFixed(1);
+  }
+
   var REFRESH_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -42,10 +64,13 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       open: false,
       selectedId: null,
       data: null,
+      aggregate: null,
       loading: false,
       error: null,
       loadedKey: null
     };
+    this._req = 0;             // in-flight request token (stale responses are dropped)
+    this._triggerScore = null; // last rounded score drawn on the trigger ring
     this._onDocDown = this._onDocDown.bind(this);
     this._onReposition = this._onReposition.bind(this);
     this._buildTrigger();
@@ -58,15 +83,22 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   Component.prototype.update = function (opts) {
     var prev = this.opts || {};
     this.opts = opts || {};
-    this._renderTrigger();
 
     // Invalidate cached data if any data-affecting option changed.
-    if (this._dataKey(prev) !== this._dataKey(this.opts)) {
-      this.state.data = null;
-      this.state.loadedKey = null;
-      if (this.state.open) {
-        this._load();
-      }
+    var dataChanged = this._dataKey(prev) !== this._dataKey(this.opts);
+    if (dataChanged) {
+      this._invalidate();
+    }
+    this._renderTrigger();
+
+    // The flyout loads lazily on open, but the score trigger needs data on the
+    // sheet itself. Never re-fire on a plain repaint while a load is running or
+    // after an error (the refresh button / reopening the panel retries those).
+    var wantsData = this.state.open || this.opts.iconMode === "score";
+    var canLoad =
+      !this.state.data && !this.state.loading && (dataChanged || !this.state.error);
+    if (wantsData && canLoad) {
+      this._load();
     }
     if (this.state.open) {
       this._positionPanel();
@@ -75,6 +107,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
   Component.prototype.destroy = function () {
     this._closePanel(true);
+    this._req++;
     if (this.host) this.host.innerHTML = "";
   };
 
@@ -90,6 +123,16 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       sort: o.sort,
       maxItems: o.maxItems
     });
+  };
+
+  /** Drop cached data and any response still in flight. */
+  Component.prototype._invalidate = function () {
+    this.state.data = null;
+    this.state.aggregate = null;
+    this.state.loadedKey = null;
+    this.state.error = null;
+    this.state.loading = false;
+    this._req++;
   };
 
   // ---------------------------------------------------------------------------
@@ -109,22 +152,92 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
   Component.prototype._renderTrigger = function () {
     var o = this.opts;
-    this.trigger.innerHTML = icons.render({
-      mode: o.iconMode,
-      builtin: o.iconBuiltin,
-      leonardo: o.iconLeonardo
-    });
-    this.trigger.classList.toggle("tsf-trigger--chip", o.triggerStyle === "chip");
-    this.trigger.classList.toggle("tsf-trigger--bare", o.triggerStyle !== "chip");
-    var size = o.iconSize || 28;
-    this.trigger.style.setProperty("--tsf-icon-size", size + "px");
-    if (o.iconColor) {
-      this.trigger.style.setProperty("--tsf-icon-color", o.iconColor);
+    var t = this.trigger;
+    var isScore = o.iconMode === "score";
+
+    t.classList.toggle("tsf-trigger--score", isScore);
+    t.classList.toggle("tsf-trigger--chip", o.triggerStyle === "chip");
+    t.classList.toggle("tsf-trigger--bare", o.triggerStyle !== "chip");
+    t.style.setProperty("--tsf-icon-size", (o.iconSize || 28) + "px");
+
+    var label;
+    if (isScore) {
+      // Colour comes from the score band, never from the icon colour.
+      t.style.removeProperty("--tsf-icon-color");
+      label = this._renderScoreTrigger();
     } else {
-      this.trigger.style.removeProperty("--tsf-icon-color");
+      t.innerHTML = icons.render({
+        mode: o.iconMode,
+        builtin: o.iconBuiltin,
+        leonardo: o.iconLeonardo
+      });
+      t.classList.remove("tsf-trigger--loading");
+      setBand(t, null);
+      this._triggerScore = null;
+      if (o.iconColor) {
+        t.style.setProperty("--tsf-icon-color", o.iconColor);
+      } else {
+        t.style.removeProperty("--tsf-icon-color");
+      }
+      label = o.title || "Show Trust Scores";
     }
-    this.trigger.setAttribute("aria-label", o.title || "Show Trust Scores");
-    this.trigger.title = o.title || "Show Trust Scores";
+    t.setAttribute("aria-label", label);
+    t.title = label;
+  };
+
+  /**
+   * Draw the aggregate-score ring on the trigger, in the same format as the
+   * KPI rings. Returns the tooltip / aria label for the current state.
+   */
+  Component.prototype._renderScoreTrigger = function () {
+    var s = this.state;
+    var t = this.trigger;
+    var title = this.opts.title || "Trust Scores";
+    var agg = s.aggregate;
+    var score = agg && typeof agg.score === "number" ? agg.score : null;
+    var rounded = score == null ? null : Math.round(score);
+    var band, text, label;
+    var loading = false;
+
+    if (rounded != null) {
+      band = scoreBand(score);
+      text = String(rounded);
+      label =
+        title + " · average " + rounded + " across " + agg.count +
+        (agg.count === 1 ? " dataset" : " datasets");
+    } else if (s.loading) {
+      band = "na";
+      text = "…";
+      loading = true;
+      label = title + " · loading…";
+    } else if (s.error) {
+      band = "na";
+      text = "!";
+      label = title + " · couldn’t load scores";
+    } else {
+      band = "na";
+      text = "–";
+      label = title + " · no scored datasets in scope";
+    }
+
+    setBand(t, band);
+    t.classList.toggle("tsf-trigger--loading", loading);
+
+    // Animate the arc in only when the number actually changes, so routine
+    // repaints (resize, property edits) don't replay the fill.
+    var animate = rounded != null && rounded !== this._triggerScore;
+    t.innerHTML = this._ring(animate ? 0 : score, text);
+    this._triggerScore = rounded;
+    if (animate) {
+      var arc = t.querySelector(".tsf-ring-arc");
+      var dash = ringDash(score);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (arc) arc.setAttribute("stroke-dasharray", dash);
+        });
+      });
+    }
+    return label;
   };
 
   // ---------------------------------------------------------------------------
@@ -167,7 +280,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }, 0);
 
     this._renderData();
-    if (!this.state.data) {
+    if (!this.state.data && !this.state.loading) {
       this._load();
     }
   };
@@ -286,8 +399,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
   Component.prototype._refresh = function (e) {
     if (e) e.stopPropagation();
-    this.state.data = null;
-    this.state.loadedKey = null;
+    this._invalidate();
     this._load(true);
   };
 
@@ -295,12 +407,13 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     var self = this;
     var key = this._dataKey(this.opts);
     if (!force && this.state.loadedKey === key && this.state.data) {
-      this._renderData();
+      this._render();
       return;
     }
+    var req = ++this._req;
     this.state.loading = true;
     this.state.error = null;
-    this._renderData();
+    this._render();
 
     dataAdapter
       .load({
@@ -309,21 +422,32 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         appId: this.opts.appId,
         spaceId: this.opts.spaceId,
         datasetIds: this.opts.datasetIds,
+        transform: this.opts.transform,
         sort: this.opts.sort,
         maxItems: this.opts.maxItems
       })
-      .then(function (rows) {
+      .then(function (result) {
+        if (req !== self._req) return; // superseded by a newer request
         self.state.loading = false;
-        self.state.data = rows;
+        self.state.data = result.rows;
+        self.state.aggregate = result.aggregate;
         self.state.loadedKey = key;
-        self._renderData();
+        self._render();
       })
       .catch(function (err) {
+        if (req !== self._req) return;
         self.state.loading = false;
         self.state.error = (err && err.message) || "Failed to load trust scores.";
         self.state.data = null;
-        self._renderData();
+        self.state.aggregate = null;
+        self._render();
       });
+  };
+
+  /** Re-render everything that reflects data state. */
+  Component.prototype._render = function () {
+    this._renderTrigger();
+    this._renderData();
   };
 
   // ---------------------------------------------------------------------------
@@ -428,20 +552,21 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     );
   };
 
-  Component.prototype._ring = function (score) {
-    var R = 26;
-    var C = 2 * Math.PI * R;
-    var pct = Math.max(0, Math.min(100, score || 0));
-    var dash = (pct / 100) * C;
+  /**
+   * Score ring markup. `text` overrides the centre label (defaults to the
+   * rounded score, or an en dash when there is no score).
+   */
+  Component.prototype._ring = function (score, text) {
+    if (text == null) text = score == null ? "–" : String(Math.round(score));
     return (
       '<div class="tsf-ring">' +
       '<svg viewBox="0 0 64 64" class="tsf-ring-svg">' +
-      '<circle class="tsf-ring-track" cx="32" cy="32" r="' + R + '"></circle>' +
-      '<circle class="tsf-ring-arc" cx="32" cy="32" r="' + R + '" ' +
-      'stroke-dasharray="' + dash.toFixed(1) + " " + C.toFixed(1) + '" ' +
+      '<circle class="tsf-ring-track" cx="32" cy="32" r="' + RING_R + '"></circle>' +
+      '<circle class="tsf-ring-arc" cx="32" cy="32" r="' + RING_R + '" ' +
+      'stroke-dasharray="' + ringDash(score) + '" ' +
       'transform="rotate(-90 32 32)"></circle>' +
       "</svg>" +
-      '<div class="tsf-ring-val">' + (score == null ? "–" : Math.round(score)) + "</div>" +
+      '<div class="tsf-ring-val">' + escapeHtml(text) + "</div>" +
       "</div>"
     );
   };

@@ -592,3 +592,44 @@ body.qv-theme-dark .tsf-panel,
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ---- Aggregate-score trigger ----------------------------------------- */
+/* The button becomes a score ring: same markup as a KPI ring, scaled to the
+   configured size. Colour comes from the score band, not the icon colour. */
+.tsf-trigger--score {
+  padding: 6px;
+  border-radius: 999px;
+}
+.tsf-trigger--score .tsf-ring,
+.tsf-trigger--score .tsf-ring-svg {
+  width: var(--tsf-icon-size);
+  height: var(--tsf-icon-size);
+}
+.tsf-trigger--score .tsf-ring-track,
+.tsf-trigger--score .tsf-ring-arc {
+  stroke-width: 7;
+}
+.tsf-trigger--score .tsf-ring-val {
+  font-size: calc(var(--tsf-icon-size) * 0.38);
+  letter-spacing: -0.03em;
+}
+.tsf-trigger--score.is-active .tsf-ring-svg {
+  animation: tsf-pop 0.35s var(--tsf-ease);
+}
+/* Waiting for scores: pulse the ring, mute the placeholder glyph. */
+.tsf-trigger--loading .tsf-ring {
+  animation: tsf-pulse 1.3s ease-in-out infinite;
+}
+.tsf-trigger--loading .tsf-ring-val {
+  color: var(--tsf-fg-muted);
+}
+@keyframes tsf-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tsf-trigger--loading .tsf-ring,
+  .tsf-trigger--score .tsf-ring-svg {
+    animation-duration: 0.01ms !important;
+  }
+}

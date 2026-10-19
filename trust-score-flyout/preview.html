@@ -30,13 +30,14 @@
     }
     .toolbar .spacer { flex: 1; }
     .cell {
-      width: 52px; height: 44px; display: flex; align-items: center; justify-content: center;
+      min-width: 52px; height: 64px; display: flex; align-items: center; justify-content: center;
       border-radius: 10px;
     }
     .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0; }
     .controls label { font-size: 13px; display: inline-flex; gap: 6px; align-items: center;
       background: rgba(127,127,127,.08); border: 1px solid rgba(127,127,127,.18);
       padding: 6px 10px; border-radius: 10px; }
+    .controls label.is-hidden { display: none; }
     .note { font-size: 13px; opacity: .7; line-height: 1.6; margin-top: 24px; }
     select { font: inherit; }
   </style>
@@ -44,8 +45,9 @@
 <body>
   <div class="wrap">
     <h1>Trust Score Flyout</h1>
-    <p class="sub">Live preview running the real extension component in <b>demo-data</b> mode. Click the icon.
-      Demo data includes transformation warnings (⚠ / ●) and dataset links.</p>
+    <p class="sub">Live preview running the real extension component in <b>demo-data</b> mode. Click the button.
+      Demo data includes transformation warnings (⚠ / ●) and dataset links. Switch the button to
+      <b>aggregate score</b> to see the average Trust Score drawn on the button itself.</p>
 
     <div class="toolbar">
       <strong style="font-size:14px;">Dashboard header</strong>
@@ -54,7 +56,13 @@
     </div>
 
     <div class="controls">
-      <label>Icon
+      <label>Button
+        <select id="mode">
+          <option value="builtin">icon</option>
+          <option value="score">aggregate score</option>
+        </select>
+      </label>
+      <label id="iconLabel">Icon
         <select id="icon">
           <option value="search">search (default)</option>
           <option value="shield">shield</option>
@@ -71,6 +79,13 @@
         <select id="style">
           <option value="bare">bare</option>
           <option value="chip">chip</option>
+        </select>
+      </label>
+      <label>Size
+        <select id="size">
+          <option value="28">28 px</option>
+          <option value="40">40 px</option>
+          <option value="56">56 px</option>
         </select>
       </label>
       <label>Sort
@@ -95,22 +110,25 @@
     require(["lib/component"], function (Component) {
       var host = document.getElementById("host");
       var comp = new Component(host);
+      var $ = function (id) { return document.getElementById(id); };
 
       function render() {
+        var mode = $("mode").value;
+        $("iconLabel").classList.toggle("is-hidden", mode === "score");
         comp.update({
           title: "Trust Scores",
-          iconMode: "builtin",
-          iconBuiltin: document.getElementById("icon").value,
-          triggerStyle: document.getElementById("style").value,
-          iconSize: 28,
+          iconMode: mode,
+          iconBuiltin: $("icon").value,
+          triggerStyle: $("style").value,
+          iconSize: Number($("size").value),
           demo: true,
           scope: "appLineage",
-          sort: document.getElementById("sort").value,
+          sort: $("sort").value,
           maxItems: 20
         });
       }
-      ["icon", "style", "sort"].forEach(function (id) {
-        document.getElementById(id).addEventListener("change", render);
+      ["mode", "icon", "style", "size", "sort"].forEach(function (id) {
+        $(id).addEventListener("change", render);
       });
       render();
     });

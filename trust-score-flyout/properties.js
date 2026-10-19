@@ -2,6 +2,10 @@
  * properties.js
  * Property-panel definition for the Trust Score Flyout extension.
  * All settings are stored under layout.props.*
+ *
+ * Items use `show` callbacks for conditional visibility: the property panel
+ * re-evaluates them whenever a value changes, so picking a different "Icon
+ * source" hides the fields that no longer apply.
  */
 define(["./lib/icons"], function (icons) {
   "use strict";
@@ -10,17 +14,26 @@ define(["./lib/icons"], function (icons) {
     return { value: n, label: n.charAt(0).toUpperCase() + n.slice(1) };
   });
 
-  function isLeonardo(data) {
-    return data.props && data.props.iconMode === "leonardo";
+  function iconMode(data) {
+    return (data && data.props && data.props.iconMode) || "builtin";
   }
   function isBuiltin(data) {
-    return !data.props || data.props.iconMode !== "leonardo";
+    return iconMode(data) === "builtin";
+  }
+  function isLeonardo(data) {
+    return iconMode(data) === "leonardo";
+  }
+  function isScore(data) {
+    return iconMode(data) === "score";
+  }
+  function isIcon(data) {
+    return !isScore(data);
   }
 
-  // ---- Appearance / Icon --------------------------------------------------
-  var iconSection = {
+  // ---- Appearance / Button ------------------------------------------------
+  var buttonSection = {
     type: "items",
-    label: "Icon",
+    label: "Button",
     items: {
       title: {
         ref: "props.title",
@@ -35,7 +48,8 @@ define(["./lib/icons"], function (icons) {
         label: "Icon source",
         options: [
           { value: "builtin", label: "Built-in (SVG)" },
-          { value: "leonardo", label: "Leonardo UI (lui-icon)" }
+          { value: "leonardo", label: "Leonardo UI (lui-icon)" },
+          { value: "score", label: "Aggregate Trust Score" }
         ],
         defaultValue: "builtin"
       },
@@ -62,14 +76,23 @@ define(["./lib/icons"], function (icons) {
           "\"filter\", \"tag\". Renders as lui-icon--<name>.",
         show: isLeonardo
       },
+      scoreHint: {
+        component: "text",
+        text:
+          "Replaces the icon with a score ring showing the average Trust Score of " +
+          "every scored dataset in scope, coloured with the same bands as the " +
+          "flyout. It loads as soon as the sheet renders. Tip: a size of 40 px or " +
+          "more keeps the number easy to read.",
+        show: isScore
+      },
       triggerStyle: {
         ref: "props.triggerStyle",
         type: "string",
         component: "buttongroup",
-        label: "Icon style",
+        label: "Button style",
         options: [
-          { value: "bare", label: "Bare icon" },
-          { value: "chip", label: "Chip / button" }
+          { value: "bare", label: "Bare" },
+          { value: "chip", label: "Chip" }
         ],
         defaultValue: "bare"
       },
@@ -77,7 +100,7 @@ define(["./lib/icons"], function (icons) {
         ref: "props.iconSize",
         type: "number",
         component: "slider",
-        label: "Icon size (px)",
+        label: "Size (px)",
         min: 16,
         max: 64,
         step: 2,
@@ -87,7 +110,8 @@ define(["./lib/icons"], function (icons) {
         ref: "props.iconColor",
         type: "string",
         label: "Icon colour (optional)",
-        expression: "optional"
+        expression: "optional",
+        show: isIcon
       }
     }
   };
@@ -176,6 +200,13 @@ define(["./lib/icons"], function (icons) {
         step: 1,
         defaultValue: 20
       },
+      maxItemsHint: {
+        component: "text",
+        text:
+          "Caps the cards in the flyout only. The aggregate score on the button " +
+          "always averages every scored dataset in scope.",
+        show: isScore
+      },
       transform: {
         ref: "props.transform",
         type: "boolean",
@@ -217,7 +248,7 @@ define(["./lib/icons"], function (icons) {
     type: "items",
     component: "accordion",
     items: {
-      icon: iconSection,
+      icon: buttonSection,
       data: dataSection,
       settings: { uses: "settings" },
       about: aboutSection

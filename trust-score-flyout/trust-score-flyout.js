@@ -1,7 +1,8 @@
 /**
  * Trust Score Flyout — Qlik Cloud (client-managed) visualization extension.
  *
- * Renders a customisable icon inside the object. Clicking it reveals an
+ * Renders a customisable button (an icon, or a ring showing the aggregate
+ * Trust Score) inside the object. Clicking it reveals an
  * animated flyout listing the datasets in scope that have a Qlik Cloud Trust
  * Score, as a horizontal row of KPI rings. Clicking a KPI expands a drill-down
  * showing the axis breakdown, weights and dataset description. Clicking outside

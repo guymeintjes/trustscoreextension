@@ -5,6 +5,11 @@
  * everything into the shape the UI renders. Swap `load()` internals here if the
  * data source ever changes; the UI never talks to the API directly.
  *
+ * load() resolves to { rows, aggregate }. `rows` is the sorted, capped list the
+ * flyout renders. `aggregate` is { score, count }: the plain mean Trust Score
+ * across every scored dataset in scope, computed BEFORE the maxItems cap so it
+ * describes the whole scope rather than the top of the list.
+ *
  * Output row shape:
  * {
  *   datasetId, name, technicalName, description, openUrl,
@@ -297,6 +302,9 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       return r && typeof r.score === "number";
     });
 
+    // Aggregate over everything in scope, before sorting/capping.
+    var aggregate = aggregateOf(rows);
+
     rows.sort(function (a, b) {
       if (sort === "name") {
         return String(a.name).localeCompare(String(b.name));
@@ -310,11 +318,31 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     if (options.maxItems && options.maxItems > 0) {
       rows = rows.slice(0, options.maxItems);
     }
-    return rows;
+    return { rows: rows, aggregate: aggregate };
+  }
+
+  /**
+   * The headline number for the score trigger: an unweighted mean of the
+   * dataset scores. Trust Scores are already 0–100 per dataset and the API
+   * offers nothing sensible to weight by (row counts, usage…), so a plain
+   * average is the honest choice. Returns score null when nothing is scored.
+   */
+  function aggregateOf(rows) {
+    var scored = (rows || []).filter(function (r) {
+      return r && typeof r.score === "number";
+    });
+    if (!scored.length) {
+      return { score: null, count: 0 };
+    }
+    var sum = scored.reduce(function (acc, r) {
+      return acc + r.score;
+    }, 0);
+    return { score: sum / scored.length, count: scored.length };
   }
 
   return {
     load: load,
+    aggregate: aggregateOf,
     axisLabel: axisLabel,
     metricLabel: metricLabel
   };
