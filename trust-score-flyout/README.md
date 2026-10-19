@@ -115,19 +115,33 @@ It's light on Qlik by design:
 
 ## Where the flyout opens
 
-The flyout works out where to open each time, from the button's position and the
-room around it:
+The flyout works out where to open from the button's position, the room around
+it, and how big it's going to get. As it opens it quietly measures every
+dataset's drill-down, and the Field health list at its longest, then places
+itself for the tallest of them. Clicking through datasets never sends it to
+another side.
 
-- **Where everything fits.** Below or above first, whichever has more room, so
-  the drill-down has space to grow. Failing that, to the right or left.
-- **When nothing fits,** on the side that shows the most of it, and the panel
-  scrolls. The header stays put, and so does the side the flyout is on unless
-  another shows clearly more, so it doesn't jump about as you click.
+- **Below or above if it fits there**, whichever has more room.
+- **Otherwise the side that shows the most of it**, judged by area, and the panel
+  scrolls. Below and above count a quarter extra when they can show at least half
+  of it, because that's where people expect a flyout. A sliver above the button
+  loses to a full-height panel beside it.
+- **It stays connected as it grows.** Below the button it hangs from its top
+  edge. Above it, it rests on its bottom edge and grows upward. Beside it, it
+  stays centred on the button: as a drill-down opens or closes it glides up or
+  down in step, frame by frame, and the pointer slides along its edge so it
+  stays level with the button the whole way. Its width is set to the widest
+  drill-down from the start, so a long description can't widen it later.
+- **Switching datasets morphs** from one drill-down straight to the next, so the
+  flyout moves once and never snaps shut in between.
 - **Never over the button**, unless there's no usable room on any side at all (a
   tiny window). Only then does it overlap, and without a pointer, since there's
   nothing to point at.
 - **The pointer** sits on the edge facing the button, at the point on that edge
   closest to the button's centre, and the flyout grows out of it as it opens.
+
+The measuring happens once each time the content changes, in a single pass the
+browser never paints, so it costs a few milliseconds and doesn't flicker.
 
 ## When a viewer can't see Trust Scores
 

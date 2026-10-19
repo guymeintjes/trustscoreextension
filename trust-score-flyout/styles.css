@@ -150,6 +150,7 @@ body.qv-theme-dark .tsf-panel,
 .tsf-side-left { --tsf-shift-x: 8px; --tsf-shift-y: 0px; }
 
 .tsf-panel-inner {
+  box-sizing: border-box; /* its height cap includes the border */
   background: var(--tsf-bg);
   border: 1px solid var(--tsf-border);
   border-radius: 16px;
@@ -903,4 +904,13 @@ body.qv-theme-dark .tsf-panel,
 @media (prefers-reduced-motion: reduce) {
   .tsf-fbar-fill,
   .tsf-tab::after { transition-duration: 0.01ms !important; }
+}
+
+/* Invisible copy of a drill-down, laid out only to measure the flyout's
+   planned size (see _planFor); never painted. */
+.tsf-measure {
+  display: block !important;
+  height: auto !important;
+  visibility: hidden;
+  pointer-events: none;
 }
