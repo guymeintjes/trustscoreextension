@@ -39,6 +39,13 @@ browser. It runs the real component on sample data, no tenant required.
 - **A proper drill-down.** Per-axis scores and weights as animated bars, the
   dataset description, when it was last updated, and an **Open dataset** link
   into the hub. Click the same card again to close it.
+- **A gentle nudge for first-timers.** Until someone has opened a drill-down, a
+  quiet line under the tiles tells them they can ("Click a score to see what's
+  behind it", or "Tap" on touch screens). It folds away on their first click and
+  the browser remembers, so it never nags.
+- **Long names stay tidy.** Tile labels get two lines at most and end in an
+  ellipsis, even for names without spaces. Hover for the full name, which the
+  drill-down also shows in full.
 - **Scope that follows the app.** By default it shows the datasets this app
   actually loads, worked out from the app's lineage and script.
 - **Transformation warnings.** A heuristic spots when the load script filters,
@@ -218,7 +225,8 @@ It loads the real `component.js` in demo mode, the very same component the
 extension ships. Use the controls under the toolbar to switch between an icon and
 the aggregate score, change the style and size, and try the sort orders. Set
 **Viewer** to *no access* to see the locked or hidden button, and tick **Edit
-mode** to see how hide mode looks to an author.
+mode** to see how hide mode looks to an author. Once you've clicked a tile, the
+drill-down hint is remembered; **Show the hint again** brings it back.
 
 ## Install to Qlik Cloud
 

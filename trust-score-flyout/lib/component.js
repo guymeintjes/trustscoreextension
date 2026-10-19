@@ -44,6 +44,36 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
   };
 
+  // One-time drill-down hint. Shown under the tiles until the viewer first
+  // opens a dataset, then remembered in this browser (and for the rest of the
+  // page even when storage is blocked) so it never nags.
+  var HINT_KEY = "tsf.hint.drilldown.v1";
+  var hintSeenThisPage = false;
+
+  function hintSeen() {
+    if (hintSeenThisPage) return true;
+    try {
+      return window.localStorage.getItem(HINT_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function markHintSeen() {
+    hintSeenThisPage = true;
+    try {
+      window.localStorage.setItem(HINT_KEY, "1");
+    } catch (e) { /* private mode or blocked storage: the page flag still holds */ }
+  }
+
+  function hintText() {
+    var touch = false;
+    try {
+      touch = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
+    } catch (e) { /* assume a mouse */ }
+    return (touch ? "Tap" : "Click") + " a score to see what’s behind it";
+  }
+
   function h(tag, cls, html) {
     var el = document.createElement(tag);
     if (cls) el.className = cls;
@@ -509,8 +539,11 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
     var body = h("div", "tsf-body");
     this.kpis = h("div", "tsf-kpis");
+    this.hint = h("div", "tsf-hint");
+    this.hint.style.display = "none";
     this.detail = h("div", "tsf-detail");
     body.appendChild(this.kpis);
+    body.appendChild(this.hint);
     body.appendChild(this.detail);
     inner.appendChild(body);
 
@@ -619,6 +652,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   Component.prototype._renderData = function () {
     if (!this.panel || !this.kpis) return;
     var s = this.state;
+    this._renderHint(false); // only the tile view below brings it back
 
     if (s.loading) {
       this.kpis.innerHTML = this._skeleton();
@@ -673,6 +707,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     if (s.selectedId && !s.data.some(function (r) { return r.datasetId === s.selectedId; })) {
       s.selectedId = null;
     }
+    this._renderHint(!hintSeen() && !s.selectedId);
     this._renderDetail(false);
     this._positionPanel();
   };
@@ -688,6 +723,29 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       '<div class="tsf-msg-hint">' + escapeHtml(txt.hint) + "</div>" +
       "</div>"
     );
+  };
+
+  /** Show or hide the one-time drill-down hint under the tiles. */
+  Component.prototype._renderHint = function (show) {
+    var el = this.hint;
+    if (!el) return;
+    if (!show) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "";
+    el.classList.remove("is-gone");
+    el.innerHTML =
+      '<span class="tsf-hint-glyph">' + icons.glyph("pointer") + "</span>" +
+      "<span>" + escapeHtml(hintText()) + "</span>";
+  };
+
+  /** First drill-down: fold the hint away and remember it was learnt. */
+  Component.prototype._dismissHint = function () {
+    if (!hintSeen()) markHintSeen();
+    if (this.hint && this.hint.style.display !== "none") {
+      this.hint.classList.add("is-gone");
+    }
   };
 
   Component.prototype._kpiCard = function (row, index) {
@@ -776,6 +834,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       c.classList.toggle("is-selected", on);
       c.setAttribute("aria-pressed", String(on));
     });
+    this._dismissHint();
     this._renderDetail(true);
   };
 
@@ -982,6 +1041,14 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       return iso;
     }
   }
+
+  /** Bring the drill-down hint back (used by the local preview page). */
+  Component.resetHint = function () {
+    hintSeenThisPage = false;
+    try {
+      window.localStorage.removeItem(HINT_KEY);
+    } catch (e) { /* nothing stored */ }
+  };
 
   return Component;
 });

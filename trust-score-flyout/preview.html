@@ -38,6 +38,9 @@
       background: rgba(127,127,127,.08); border: 1px solid rgba(127,127,127,.18);
       padding: 6px 10px; border-radius: 10px; }
     .controls label.is-hidden { display: none; }
+    .controls button { font: inherit; font-size: 13px; cursor: pointer; color: inherit;
+      background: rgba(127,127,127,.08); border: 1px solid rgba(127,127,127,.18);
+      padding: 6px 10px; border-radius: 10px; }
     .note { font-size: 13px; opacity: .7; line-height: 1.6; margin-top: 24px; }
     select { font: inherit; }
   </style>
@@ -110,6 +113,7 @@
         </select>
       </label>
       <label><input type="checkbox" id="edit" /> Edit mode</label>
+      <button type="button" id="resetHint" title="The hint under the tiles is shown until your first click, then remembered">Show the hint again</button>
     </div>
 
     <div class="note">
@@ -148,6 +152,7 @@
       ["mode", "icon", "style", "size", "sort", "noAccess", "viewer", "edit"].forEach(function (id) {
         $(id).addEventListener("change", render);
       });
+      $("resetHint").addEventListener("click", function () { Component.resetHint(); });
       render();
     });
   </script>

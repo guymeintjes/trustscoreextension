@@ -89,6 +89,7 @@ define([], function () {
       '<rect x="5" y="11" width="14" height="9" rx="2"></rect>' +
         '<path d="M8 11V8a4 4 0 0 1 8 0v3"></path>'
     ),
+    pointer: svg('<path d="M5 3v15l4-4 3 6 2.2-1-3-6H17z"></path>'),
     external: svg(
       '<path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path>' +
         '<path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path>'

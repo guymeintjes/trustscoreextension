@@ -301,6 +301,10 @@ body.qv-theme-dark .tsf-panel,
   letter-spacing: -0.02em;
   color: var(--tsf-band, var(--tsf-fg));
 }
+/* Two lines at most, ending in an ellipsis. Names without spaces (e.g.
+   Subtraject_UitvoerendSpecialisme) are allowed to break mid-word; otherwise
+   the label grows wider than the card and the clamp never kicks in. The full
+   name stays in the tooltip. */
 .tsf-kpi-name {
   font-size: 12px;
   font-weight: 600;
@@ -311,6 +315,8 @@ body.qv-theme-dark .tsf-panel,
   -webkit-box-orient: vertical;
   overflow: hidden;
   max-height: 2.5em;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .tsf-kpi-delta {
   position: absolute;
@@ -355,6 +361,11 @@ body.qv-theme-dark .tsf-panel,
   justify-content: space-between;
   gap: 12px;
 }
+/* The drill-down shows names in full, wrapping long ones rather than
+   letting them push the score aside or run off the card. */
+.tsf-detail-heading { min-width: 0; }
+.tsf-detail-name,
+.tsf-detail-tech { overflow-wrap: anywhere; }
 .tsf-detail-name {
   font-size: 15px;
   font-weight: 700;
@@ -694,4 +705,48 @@ body.qv-theme-dark .tsf-panel,
 
 @media (prefers-reduced-motion: reduce) {
   .tsf-trigger--reveal { animation-duration: 0.01ms !important; }
+}
+
+/* ---- Drill-down hint ----------------------------------------------------- */
+/* One muted line under the tiles, where the drill-down opens. Folds away on
+   the first tile click and isn't shown again in this browser. */
+.tsf-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -4px 8px 8px;
+  font-size: 11.5px;
+  color: var(--tsf-fg-muted);
+  max-height: 32px;
+  overflow: hidden;
+  transition: max-height 0.3s var(--tsf-ease), opacity 0.2s ease,
+    margin 0.3s var(--tsf-ease);
+}
+.tsf-hint.is-gone {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.tsf-hint-glyph {
+  display: inline-flex;
+  color: var(--tsf-accent);
+}
+.tsf-hint-glyph svg {
+  width: 14px;
+  height: 14px;
+  /* Two small nudges towards the tiles once they've settled, then still. */
+  animation: tsf-nudge 1s var(--tsf-ease) 0.6s 2;
+}
+@keyframes tsf-nudge {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-2px, -3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tsf-hint,
+  .tsf-hint-glyph svg {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
 }
