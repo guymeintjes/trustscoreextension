@@ -15,6 +15,8 @@
  *   - POST /api/data-governance/trust-scores/results/data-sets/actions/filter   (trust scores)
  *   - GET  /api/v1/lineage-graphs/nodes/{appQri}?level=resource&up=1             (what the app loads)
  *   - GET  /api/v1/spaces?name=...                                              (space name -> id)
+ *   - GET  /api/v1/apps/{appId}/data/metadata                                   (tables after reload)
+ *   - POST /api/data-governance/data-qualities/field-qualities/actions/filter   (field health)
  *
  * Note: dataset catalog items expose resourceAttributes.secureQri (the lineage
  * node id) and resourceAttributes.technicalName. Dataset items have NO
@@ -35,6 +37,7 @@ define([], function () {
 
   var ITEMS_PATH = "/api/v1/items";
   var LINEAGE_PATH = "/api/v1/lineage-graphs/nodes/";
+  var FIELD_QUALITIES_PATH = "/api/data-governance/data-qualities/field-qualities/actions/filter";
   var SPACES_PATH = "/api/v1/spaces";
   // The lineage API allows ~20 calls a minute, so each app's graph is fetched
   // once per page and shared by every copy of the extension. A failed fetch is
@@ -51,6 +54,7 @@ define([], function () {
   var MAX_ITEM_PAGES = 30;
 
   var _csrfToken = null;
+  var _csrfPending = null;
 
   function jsonOrThrow(res) {
     if (!res.ok) {
@@ -73,7 +77,9 @@ define([], function () {
     if (_csrfToken) {
       return Promise.resolve(_csrfToken);
     }
-    return fetch(CSRF_PATH, {
+    // Concurrent callers (several copies of the extension) share one request.
+    if (_csrfPending) return _csrfPending;
+    _csrfPending = fetch(CSRF_PATH, {
       method: "GET",
       credentials: "same-origin",
       headers: { accept: "application/json" }
@@ -89,11 +95,13 @@ define([], function () {
         return null;
       })
       .then(function () {
+        _csrfPending = null;
         if (!_csrfToken) {
           _csrfToken = readCookie("_csrfToken");
         }
         return _csrfToken;
       });
+    return _csrfPending;
   }
 
   function readCookie(name) {
@@ -268,8 +276,8 @@ define([], function () {
   }
 
   /**
-   * Fetch the app's load-script text (latest version). Used by the Tier 1
-   * transformation heuristic. Returns "" if unavailable.
+   * Fetch the app's load-script text (latest version). Used for transformation
+   * insights and to find the app's datasets. Returns "" if unavailable.
    * @returns {Promise<string>}
    */
   function getAppScript(appId) {
@@ -394,7 +402,78 @@ define([], function () {
     });
   }
 
+  /**
+   * The app's data model after its last reload: which tables survived, and
+   * whether Section Access reduces rows per user. Resolves to
+   * { tables: [names], sectionAccess }; tables is empty when Qlik has no
+   * metadata for the app.
+   */
+  function getAppMetadata(appId) {
+    if (!appId) return Promise.resolve(null);
+    return getJson(APPS_PATH + "/" + encodeURIComponent(appId) + "/data/metadata").then(function (body) {
+      var tables = ((body && body.tables) || [])
+        .map(function (t) {
+          return t && t.name;
+        })
+        .filter(Boolean);
+      return { tables: tables, sectionAccess: !!(body && body.has_section_access) };
+    });
+  }
+
+  /**
+   * POST JSON with the CSRF token. Without a token a 403 may be the gateway
+   * rejecting the POST rather than a permission decision, so it's flagged.
+   */
+  function postJson(path, body) {
+    return ensureCsrf().then(function (token) {
+      var headers = { "content-type": "application/json", accept: "application/json" };
+      if (token) headers["qlik-csrf-token"] = token;
+      return fetch(path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: headers,
+        body: JSON.stringify(body)
+      })
+        .then(jsonOrThrow)
+        .catch(function (err) {
+          if (!token && err && err.status === 403) err.csrfSuspect = true;
+          throw err;
+        });
+    });
+  }
+
+  /**
+   * Field-level data quality from the latest check Qlik ran: per field, how
+   * many sampled values were valid, invalid or empty. Reads results only; it
+   * never starts a new check. Up to 100 datasets per call.
+   * Resolves to { datasetId: { computedAt, fields: [raw FieldQuality] } };
+   * datasets with no computed result are absent.
+   */
+  function getFieldQualities(datasetIds) {
+    var ids = (datasetIds || []).filter(Boolean).slice(0, 100);
+    if (!ids.length) return Promise.resolve({});
+    var body = {
+      datasets: ids.map(function (id) {
+        return { datasetId: id };
+      })
+    };
+    return postJson(FIELD_QUALITIES_PATH, body).then(function (res) {
+      var map = {};
+      ((res && res.fieldQualities) || []).forEach(function (r) {
+        if (r && r.datasetId) {
+          map[r.datasetId] = {
+            computedAt: (r.computed && r.computed.at) || null,
+            fields: r.fields || []
+          };
+        }
+      });
+      return map;
+    });
+  }
+
   return {
+    getFieldQualities: getFieldQualities,
+    getAppMetadata: getAppMetadata,
     getAppLineageGraph: getAppLineageGraph,
     findSpaceIdsByName: findSpaceIdsByName,
     getAppSpaceId: getAppSpaceId,

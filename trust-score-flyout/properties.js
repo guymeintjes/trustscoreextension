@@ -211,7 +211,7 @@ define(["./lib/icons"], function (icons) {
         ref: "props.transform",
         type: "boolean",
         component: "switch",
-        label: "Transformation warnings",
+        label: "Transformation insights",
         options: [
           { value: true, label: "On" },
           { value: false, label: "Off" }
@@ -222,9 +222,9 @@ define(["./lib/icons"], function (icons) {
       transformHint: {
         component: "text",
         text:
-          "Flags datasets whose load script reshapes the source (filter, aggregate, " +
-          "join…), so the parent Trust Score may not fully apply in this app. This is " +
-          "a best-effort heuristic, shown as a caveat — not a competing score."
+          "Reads this app's load script and flags datasets it changes on the way in " +
+          "(filtered, aggregated, joined, values recalculated…), so you know when the " +
+          "Trust Score is only a guide here. Shown as a caveat, never as a score."
       }
     }
   };

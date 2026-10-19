@@ -22,8 +22,12 @@
  * tells us which spaces to look in, and which copy to pick when the same file
  * name exists in several spaces.
  */
-define([], function () {
+define(["./script"], function (script) {
   "use strict";
+
+  var cleanScript = script.cleanScript;
+  var libRefs = script.libRefs;
+  var normPath = script.normPath;
 
   /** An app's lineage QRI is its GUID with a fixed prefix. */
   function appQri(appId) {
@@ -112,58 +116,13 @@ define([], function () {
   // ---------------------------------------------------------------------------
 
   /**
-   * The load script with comments removed and everything after an
-   * unconditional Exit Script dropped, so dead code can't count as a source.
-   * Exit Script inside IF or SUB blocks, and Exit Script When, are conditional
-   * and don't end the scan.
-   */
-  function cleanScript(script) {
-    if (!script) return "";
-    var text = String(script).replace(/\/\*[\s\S]*?\*\//g, " ");
-    var lines = text.split(/\r?\n/);
-    var out = [];
-    var depth = 0;
-    for (var i = 0; i < lines.length; i++) {
-      // Line comments, but not the // inside lib:// or https://.
-      var line = lines[i].replace(/(^|[^:])\/\/.*$/, "$1");
-      var t = line.trim();
-      if (depth === 0 && /^exit\s+script\s*;?$/i.test(t)) break;
-      if ((/^if\b/i.test(t) && /\bthen\b/i.test(t)) || /^sub\b/i.test(t)) depth++;
-      if (/\bend\s*if\b/i.test(t) || /^end\s*sub\b/i.test(t)) depth = Math.max(0, depth - 1);
-      out.push(line);
-    }
-    return out.join("\n");
-  }
-
-  /**
-   * lib:// references in a text: the space name (null when the reference has
-   * no space, "" for the personal space), the connection and the path.
-   */
-  function libRefs(text) {
-    var out = [];
-    var re = /lib:\/\/([^\]\)('"\r\n;]+)/gi;
-    var m;
-    while ((m = re.exec(text))) {
-      var ref = m[1].trim();
-      var slash = ref.indexOf("/");
-      var head = slash === -1 ? ref : ref.slice(0, slash);
-      var colon = head.indexOf(":");
-      out.push({
-        space: colon === -1 ? null : head.slice(0, colon).trim(),
-        connection: (colon === -1 ? head : head.slice(colon + 1)).trim(),
-        path: slash === -1 ? "" : ref.slice(slash + 1).trim()
-      });
-    }
-    return out;
-  }
-
-  /**
    * Everything the app references: its data-lineage entries (recorded at the
-   * last reload, with variables already expanded) and the cleaned script.
+   * last reload, with variables already expanded) and the prepared script
+   * (comments and dead code gone, plain-text variables expanded).
    * @returns {{ text: string, refs: Array, spaceNames: string[] }}
    */
-  function collectReferences(entries, script) {
-    var texts = [cleanScript(script)];
+  function collectReferences(entries, scriptText) {
+    var texts = [script.prepare(scriptText).text];
     (entries || []).forEach(function (e) {
       if (e && e.discriminator) texts.push(String(e.discriminator));
       if (e && e.statement) texts.push(String(e.statement));
@@ -198,15 +157,6 @@ define([], function () {
         return names[k];
       })
     };
-  }
-
-  function normPath(p) {
-    return String(p || "")
-      .replace(/\\/g, "/")
-      .replace(/\/+/g, "/")
-      .replace(/^\/+/, "")
-      .trim()
-      .toLowerCase();
   }
 
   function escapeRe(s) {

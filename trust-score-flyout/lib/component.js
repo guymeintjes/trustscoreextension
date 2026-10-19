@@ -119,6 +119,8 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     this.state = {
       open: false,
       selectedId: null,
+      detailTab: "breakdown", // drill-down view: "breakdown" | "fields"
+      fields: {},              // field health per dataset id, fetched on demand
       data: null,
       aggregate: null,
       visible: null,   // catalog datasets the viewer can see in scope (null = unknown)
@@ -195,6 +197,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   /** Drop cached data and any response still in flight. */
   Component.prototype._invalidate = function () {
     this.state.data = null;
+    this.state.fields = {};
     this.state.aggregate = null;
     this.state.visible = null;
     this.state.denied = false;
@@ -290,7 +293,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       t.style.removeProperty("--tsf-icon-color");
       label = this._renderScoreTrigger();
     } else {
-      t.innerHTML = this._iconHtml();
+      this._setTriggerHtml(this._iconHtml());
       t.classList.remove("tsf-trigger--loading");
       setBand(t, null);
       this._triggerScore = null;
@@ -303,6 +306,16 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
     t.setAttribute("aria-label", label);
     t.title = label;
+  };
+
+  /**
+   * Repaints are frequent in Qlik. Rewriting identical markup would restart
+   * CSS animations (the loading pulse) and churn the DOM, so skip it.
+   */
+  Component.prototype._setTriggerHtml = function (html) {
+    if (this._triggerHtml === html) return;
+    this.trigger.innerHTML = html;
+    this._triggerHtml = html;
   };
 
   Component.prototype._iconHtml = function () {
@@ -355,7 +368,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     // Animate the arc in only when the number actually changes, so routine
     // repaints (resize, property edits) don't replay the fill.
     var animate = rounded != null && rounded !== this._triggerScore;
-    t.innerHTML = this._ring(animate ? 0 : score, text);
+    this._setTriggerHtml(this._ring(animate ? 0 : score, text));
     this._triggerScore = rounded;
     if (animate) {
       var arc = t.querySelector(".tsf-ring-arc");
@@ -380,9 +393,9 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     setBand(t, "na");
     this._triggerScore = null;
     var lock = icons.glyph("lock");
-    t.innerHTML = isScore
-      ? this._ring(null, null, lock)
-      : this._iconHtml() + '<span class="tsf-lock">' + lock + "</span>";
+    this._setTriggerHtml(
+      isScore ? this._ring(null, null, lock) : this._iconHtml() + '<span class="tsf-lock">' + lock + "</span>"
+    );
     var label = (this.opts.title || "Trust Scores") + " · " + ACCESS_TEXT[status].tip;
     if (ghost) label += " (hidden from viewers without access)";
     return label;
@@ -513,7 +526,13 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   };
 
   Component.prototype._onReposition = function () {
-    if (this.state.open) this._positionPanel();
+    if (!this.state.open || this._repositionQueued) return;
+    var self = this;
+    this._repositionQueued = true;
+    requestAnimationFrame(function () {
+      self._repositionQueued = false;
+      if (self.state.open) self._positionPanel();
+    });
   };
 
   // ---------------------------------------------------------------------------
@@ -542,6 +561,8 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     this.hint = h("div", "tsf-hint");
     this.hint.style.display = "none";
     this.detail = h("div", "tsf-detail");
+    this.detail.addEventListener("click", this._onDetailClick.bind(this));
+    this.detail.addEventListener("keydown", this._onDetailKey.bind(this));
     body.appendChild(this.kpis);
     body.appendChild(this.hint);
     body.appendChild(this.detail);
@@ -617,7 +638,8 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         datasetIds: this.opts.datasetIds,
         transform: this.opts.transform,
         sort: this.opts.sort,
-        maxItems: this.opts.maxItems
+        maxItems: this.opts.maxItems,
+        fresh: !!force
       })
       .then(function (result) {
         if (req !== self._req) return; // superseded by a newer request
@@ -786,7 +808,11 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   Component.prototype._transformBadge = function (row) {
     var t = row.transformation;
     if (!t || t.band === "none" || !t.reasons || !t.reasons.length) return "";
-    var labels = { info: "Reshaped in script", alert: "Modified in script", critical: "Heavily transformed" };
+    var labels = {
+      info: "Worth knowing about this app’s data",
+      alert: "Changed by this app’s script",
+      critical: "Heavily changed by this app’s script"
+    };
     return (
       '<span class="tsf-tbadge tsf-tband--' + t.band + '" title="' +
       escapeHtml(labels[t.band] || "Transformed in script") +
@@ -851,26 +877,13 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
 
     this.detail.innerHTML = this._detailHtml(row);
-    // Animate axis bars filling in.
+    if (this.state.detailTab === "fields") this._ensureFields(row);
+    // Animate the bars filling in, once the card has slid open.
     var self = this;
     this._animateHeight(this.detail, true, function () {
-      requestAnimationFrame(function () {
-        var fills = self.detail.querySelectorAll(".tsf-axis-fill");
-        Array.prototype.forEach.call(fills, function (f, i) {
-          f.style.transitionDelay = Math.min(i * 40, 260) + "ms";
-          f.style.width = f.getAttribute("data-w") + "%";
-        });
-      });
+      self._fillBars(self.detail);
     });
-    if (!animate) {
-      // Even without the slide, ensure bars end up filled.
-      requestAnimationFrame(function () {
-        var fills = self.detail.querySelectorAll(".tsf-axis-fill");
-        Array.prototype.forEach.call(fills, function (f) {
-          f.style.width = f.getAttribute("data-w") + "%";
-        });
-      });
-    }
+    if (!animate) self._fillBars(self.detail);
   };
 
   Component.prototype._detailHtml = function (row) {
@@ -926,21 +939,22 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       "</div>" +
       desc +
       this._transformCallout(row) +
-      '<div class="tsf-axes-title">Score breakdown &amp; weights</div>' +
-      '<div class="tsf-axes">' + axes + "</div>" +
+      this._tabsHtml() +
+      this._panelHtml("breakdown", '<div class="tsf-axes">' + axes + "</div>") +
+      this._panelHtml("fields", this._fieldsHtml(row)) +
       footer +
       "</div>"
     );
   };
 
-  // "Does the parent score still apply here?" caveat, from the Tier 1 index.
+  // "Does the parent score still apply here?" caveat, from transformation insights.
   Component.prototype._transformCallout = function (row) {
     var t = row.transformation;
     if (!t || t.band === "none" || !t.reasons || !t.reasons.length) return "";
     var headings = {
-      info: "Reshaped in this app’s script",
-      alert: "Modified in this app’s script",
-      critical: "Heavily transformed in this app’s script"
+      info: "Worth knowing about this app’s data",
+      alert: "Changed by this app’s script",
+      critical: "Heavily changed by this app’s script"
     };
     var reasons = t.reasons
       .map(function (r) {
@@ -956,11 +970,242 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       '<span class="tsf-callout-glyph">' + icons.glyph(t.band) + "</span>" +
       '<span class="tsf-callout-title">' + escapeHtml(headings[t.band] || "Transformed") + "</span>" +
       "</div>" +
-      '<div class="tsf-callout-note">The Trust Score describes the source dataset. ' +
-      "The load script changes it, so treat the score as indicative for this app.</div>" +
+      '<div class="tsf-callout-note">The Trust Score describes the source dataset. Here is ' +
+      "how the data in this app differs from it, so read the score as a guide here.</div>" +
       '<ul class="tsf-reasons">' + reasons + "</ul>" +
       "</div>"
     );
+  };
+
+  // ---------------------------------------------------------------------------
+  // Drill-down tabs: score breakdown / field health
+  // ---------------------------------------------------------------------------
+
+  Component.prototype._tabsHtml = function () {
+    var self = this;
+    function tab(id, label) {
+      var on = self.state.detailTab === id;
+      return (
+        '<button type="button" class="tsf-tab' + (on ? " is-active" : "") + '" role="tab"' +
+        ' id="' + self.id + "-tab-" + id + '" aria-controls="' + self.id + "-panel-" + id + '"' +
+        ' aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-tab="' + id + '">' +
+        label + "</button>"
+      );
+    }
+    return (
+      '<div class="tsf-tabs" role="tablist" aria-label="Dataset details">' +
+      tab("breakdown", "Score breakdown") + tab("fields", "Field health") + "</div>"
+    );
+  };
+
+  Component.prototype._panelHtml = function (id, inner) {
+    return (
+      '<div class="tsf-tabpanel" role="tabpanel" data-panel="' + id + '"' +
+      ' id="' + this.id + "-panel-" + id + '" aria-labelledby="' + this.id + "-tab-" + id + '"' +
+      (this.state.detailTab === id ? "" : " hidden") + ">" + inner + "</div>"
+    );
+  };
+
+  Component.prototype._selectedRow = function () {
+    var id = this.state.selectedId;
+    return (id && (this.state.data || []).filter(function (r) { return r.datasetId === id; })[0]) || null;
+  };
+
+  Component.prototype._onDetailClick = function (e) {
+    var t = e.target;
+    while (t && t !== this.detail && !(t.getAttribute && t.getAttribute("data-tab"))) t = t.parentNode;
+    if (!t || t === this.detail) return;
+    e.stopPropagation();
+    this._setTab(t.getAttribute("data-tab"));
+  };
+
+  /** Arrow keys, Home and End move between the two tabs. */
+  Component.prototype._onDetailKey = function (e) {
+    var t = e.target;
+    var tab = t && t.getAttribute && t.getAttribute("data-tab");
+    if (!tab || ["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(e.key) === -1) return;
+    e.preventDefault();
+    var next = e.key === "Home" ? "breakdown" : e.key === "End" ? "fields" :
+      tab === "fields" ? "breakdown" : "fields";
+    this._setTab(next, true);
+  };
+
+  /** Switch view. The choice sticks while you move between datasets. */
+  Component.prototype._setTab = function (tab, focus) {
+    if ((tab !== "breakdown" && tab !== "fields") || tab === this.state.detailTab) return;
+    this.state.detailTab = tab;
+    var row = this._selectedRow();
+    var detail = this.detail;
+    if (!row || !detail) return;
+    this._morphHeight(function () {
+      Array.prototype.forEach.call(detail.querySelectorAll("[data-tab]"), function (b) {
+        var on = b.getAttribute("data-tab") === tab;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-selected", String(on));
+        b.setAttribute("tabindex", on ? "0" : "-1");
+        if (on && focus) b.focus();
+      });
+      Array.prototype.forEach.call(detail.querySelectorAll("[data-panel]"), function (p) {
+        if (p.getAttribute("data-panel") === tab) p.removeAttribute("hidden");
+        else p.setAttribute("hidden", "");
+      });
+    });
+    this._fillBars(detail.querySelector('[data-panel="' + tab + '"]'), true);
+    if (tab === "fields") this._ensureFields(row);
+  };
+
+  /**
+   * Fetch a dataset's field health the first time it's needed. A failed
+   * fetch is retried the next time the tab is shown; anything else is kept
+   * for this panel session (the refresh button clears it).
+   */
+  Component.prototype._ensureFields = function (row) {
+    var id = row.datasetId;
+    var cur = this.state.fields[id];
+    if (cur && cur.status !== "error") return;
+    var token = {};
+    this.state.fields[id] = { status: "loading", token: token };
+    if (cur) this._paintFields(row); // back to the skeleton after an error
+    var self = this;
+    dataAdapter
+      .fieldQuality(id, { demo: this.opts.demo })
+      .then(null, function (err) {
+        return { status: "error", message: (err && err.message) || "" };
+      })
+      .then(function (res) {
+        var now = self.state.fields[id];
+        if (!now || now.token !== token) return; // superseded by a refresh
+        self.state.fields[id] = res;
+        if (self.state.open && self.state.selectedId === id && self.state.detailTab === "fields") {
+          self._paintFields(row);
+        }
+      });
+  };
+
+  Component.prototype._paintFields = function (row) {
+    var panel = this.detail && this.detail.querySelector('[data-panel="fields"]');
+    if (!panel) return;
+    var self = this;
+    this._morphHeight(function () {
+      panel.innerHTML = self._fieldsHtml(row);
+    });
+    this._fillBars(panel);
+  };
+
+  function pctText(n) {
+    if (!n) return "0%";
+    if (n < 1) return "<1%";
+    if (n > 99 && n < 100) return ">99%";
+    return Math.round(n) + "%";
+  }
+
+  /** The Field health view for one dataset, in whatever state it's in. */
+  Component.prototype._fieldsHtml = function (row) {
+    var fq = this.state.fields[row.datasetId] || { status: "loading" };
+    if (fq.status === "loading") {
+      var sk =
+        '<div class="tsf-field"><div class="tsf-sk tsf-sk-line tsf-sk-field"></div>' +
+        '<div class="tsf-axis-bar tsf-sk"></div></div>';
+      return '<div class="tsf-fields tsf-fields--loading" aria-busy="true">' + sk + sk + sk + "</div>";
+    }
+    var msg = {
+      none:
+        "<b>No field health yet.</b> Qlik hasn’t run a data quality check on this " +
+        "dataset’s fields. You can run one from the dataset’s page in the catalog.",
+      denied: "<b>Not available to you.</b> Your account can’t read field quality for this dataset.",
+      error: "<b>Couldn’t load field health.</b> Use the refresh button above to try again."
+    }[fq.status];
+    if (msg) return '<p class="tsf-fields-msg">' + msg + "</p>";
+
+    var when = fq.computedAt ? formatDay(fq.computedAt) : "";
+    var meta =
+      '<div class="tsf-fields-meta">' +
+      '<span class="tsf-legend">' +
+      '<span><i class="tsf-key tsf-key--valid"></i>Valid</span>' +
+      '<span><i class="tsf-key tsf-key--invalid"></i>Invalid</span>' +
+      '<span><i class="tsf-key tsf-key--missing"></i>Missing</span>' +
+      "</span>" +
+      '<span title="Checked on a sample of ' + fq.sample.toLocaleString() + ' values per field">' +
+      "Sample of " + fq.sample.toLocaleString() + (when ? " · " + escapeHtml(when) : "") +
+      "</span></div>";
+
+    var rows = fq.fields
+      .map(function (f) {
+        var band = f.total ? scoreBand(f.valid) : "na";
+        var tip = "Valid " + pctText(f.valid) + " · Invalid " + pctText(f.invalid) + " · Missing " + pctText(f.missing);
+        function seg(kind, v) {
+          if (!v) return "";
+          return '<span class="tsf-fseg tsf-fseg--' + kind + '" style="width:' + v.toFixed(2) + '%"></span>';
+        }
+        return (
+          '<div class="tsf-field tsf-band--' + band + '" role="listitem" title="' + escapeHtml(f.name + ": " + tip) + '">' +
+          '<div class="tsf-axis-top">' +
+          '<span class="tsf-field-name">' + escapeHtml(f.name) + "</span>" +
+          (f.type ? '<span class="tsf-axis-weight">' + escapeHtml(f.type) + "</span>" : "") +
+          '<span class="tsf-axis-score">' + (f.total ? pctText(f.valid) : "–") + "</span>" +
+          "</div>" +
+          '<div class="tsf-axis-bar" role="img" aria-label="' + escapeHtml(tip) + '">' +
+          '<div class="tsf-fbar-fill" data-w="100" style="width:0%">' +
+          seg("valid", f.valid) + seg("invalid", f.invalid) + seg("missing", f.missing) +
+          "</div></div></div>"
+        );
+      })
+      .join("");
+    return meta + '<div class="tsf-fields" role="list">' + rows + "</div>";
+  };
+
+  /** Grow bars to their value, staggered. `replay` restarts them from zero. */
+  Component.prototype._fillBars = function (root, replay) {
+    if (!root) return;
+    var fills = root.querySelectorAll(".tsf-axis-fill, .tsf-fbar-fill");
+    if (replay) {
+      Array.prototype.forEach.call(fills, function (f) {
+        f.style.transitionDelay = "0ms";
+        f.style.width = "0%";
+      });
+      void root.offsetWidth;
+    }
+    requestAnimationFrame(function () {
+      Array.prototype.forEach.call(fills, function (f, i) {
+        f.style.transitionDelay = Math.min(i * 35, 300) + "ms";
+        f.style.width = (f.getAttribute("data-w") || "100") + "%";
+      });
+    });
+  };
+
+  /**
+   * Change the drill-down's content and glide its height to fit, instead of
+   * jumping (switching tabs, field health arriving).
+   */
+  Component.prototype._morphHeight = function (change) {
+    var el = this.detail;
+    if (!el || el.style.display === "none") {
+      change();
+      return;
+    }
+    var from = el.offsetHeight;
+    change();
+    el.style.height = "auto";
+    var to = el.offsetHeight;
+    var self = this;
+    if (!from || !to || from === to) {
+      if (this.state.open) this._positionPanel();
+      return;
+    }
+    el.style.height = from + "px";
+    void el.offsetHeight;
+    el.classList.add("tsf-anim");
+    el.style.height = to + "px";
+    var finished = false;
+    var finish = function (ev) {
+      if (finished || (ev && ev.propertyName !== "height")) return;
+      finished = true;
+      el.removeEventListener("transitionend", finish);
+      el.style.height = "auto";
+      if (self.state.open) self._positionPanel();
+    };
+    el.addEventListener("transitionend", finish);
+    setTimeout(finish, 400);
   };
 
   /**
@@ -1024,6 +1269,16 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function formatDay(iso) {
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    } catch (e) {
+      return "";
+    }
   }
 
   function formatDate(iso) {

@@ -39,6 +39,9 @@ browser. It runs the real component on sample data, no tenant required.
 - **A proper drill-down.** Per-axis scores and weights as animated bars, the
   dataset description, when it was last updated, and an **Open dataset** link
   into the hub. Click the same card again to close it.
+- **Field health.** A second tab in the drill-down lists the dataset's fields,
+  least healthy first, each with a bar split into valid (green), invalid (red)
+  and missing (grey) values. It's fetched only when someone opens the tab.
 - **A gentle nudge for first-timers.** Until someone has opened a drill-down, a
   quiet line under the tiles tells them they can ("Click a score to see what's
   behind it", or "Tap" on touch screens). It folds away on their first click and
@@ -49,9 +52,11 @@ browser. It runs the real component on sample data, no tenant required.
 - **Scope that follows the app.** By default it shows the datasets this app
   actually loads, taken from Qlik's own lineage graph, in whichever space they
   live.
-- **Transformation warnings.** A heuristic spots when the load script filters,
-  joins or aggregates a dataset, and marks the card with an info, warning or
-  critical glyph plus an explanation in the drill-down.
+- **Transformation insights.** The extension reads the app's load script to see
+  what happens to each dataset on its way in: filtered, aggregated, joined,
+  combined with other data, values recalculated, used only as a lookup, or not
+  kept at all. The card gets an info, warning or critical glyph, and the
+  drill-down explains why.
 - **Well behaved.** Closes on click-out, repositions on scroll and resize, flips
   above the button when there's no room below, and renders at `<body>` level so the
   Qlik object never clips it.
@@ -79,6 +84,32 @@ knowing about that number:
 In score mode the icon picker, Leonardo name and icon colour disappear from the
 properties panel because they no longer do anything. Style and size stay, since
 they still shape the ring.
+
+## Field health
+
+Open a dataset's drill-down and switch from **Score breakdown** to **Field
+health** to see how each of its fields fares in Qlik's latest data quality check:
+
+- **One row per field**, laid out like the score breakdown: the field name, its
+  type (text, integer, date, or a semantic type such as Email), and the share of
+  valid values in the same colour bands as the scores.
+- **A bar split three ways.** Green for valid values, red for invalid ones, grey
+  for missing ones. Hover over a row for the exact split.
+- **Least healthy first**, so problem fields are at the top. Long lists scroll
+  inside the card.
+- **The tab you pick sticks** as you move between datasets.
+
+It's light on Qlik by design:
+
+- **Just in time.** Nothing is fetched until someone opens the tab, and then only
+  for the dataset they're looking at. The answer is reused for that panel session
+  and shared with other copies of the extension for a minute. The refresh button
+  reads it again.
+- **Read only.** It shows the results of the last check Qlik ran (on a sample,
+  typically 1,000 values per field). It never starts a new check, which is slow
+  and limited to a few a minute. Run or schedule checks from the catalog.
+- **Honest when there's nothing to show.** If no field-level check has run, or the
+  viewer can't read it, the tab says so instead of showing empty bars.
 
 ## When a viewer can't see Trust Scores
 
@@ -145,6 +176,8 @@ signed-in user. That user needs `dataset:read` and `dataquality:read`.
 | App source references | `GET /api/v1/apps/{appId}/data/lineage` |
 | Spaces named in `lib://` paths | `GET /api/v1/spaces?name=…` |
 | App load script | `GET /api/v1/apps/{appId}/scripts` → `…/scripts/{scriptId}` → `{ script }` |
+| Tables that survived the reload | `GET /api/v1/apps/{appId}/data/metadata` |
+| Field health (on demand) | `POST /api/data-governance/data-qualities/field-qualities/actions/filter` with `{ datasets: [{ datasetId }] }` |
 | Trust scores | `POST /api/data-governance/trust-scores/results/data-sets/actions/filter` with `{ datasetIds }` |
 | CSRF (for the POST) | `GET /api/v1/csrf-token` → `qlik-csrf-token` header |
 
@@ -182,28 +215,84 @@ Set the **Dataset scope** in the properties panel:
 - **All datasets I can access.**
 - **Specific dataset IDs.** Paste the ids directly.
 
-### Transformation warnings
+### Transformation insights
 
-A Trust Score describes the **source** dataset. If the app's load script reshapes
-that data on the way in, the score may no longer describe what the app actually
-shows. This heuristic scans the load script (and the lineage statements),
-attributes statements to a dataset by the leaf of its technical name: the file
-or table name without its extension, matched as a whole word, so
-`Final_Product` never claims a load of `Final_ProductInventory`. Comments and
-code after `Exit Script` are ignored. It then raises a banded caveat:
+A Trust Score describes the **source** dataset. If the app's load script changes
+that data on the way in, the score may not describe what the app actually shows.
+The extension reads the script and tells you how, per dataset.
 
-| Signal in the script | Band | Glyph |
+It doesn't just look for keywords. It reads the script into a small model of its
+tables and follows each dataset to where it ends up:
+
+- **Statements are read the way Qlik reads them.** Semicolons inside quotes,
+  brackets and INLINE data don't split a statement. Comments and anything after
+  `Exit Script` are ignored. Every IF/ELSE branch is read, since conditions can't
+  be evaluated. Plain text variables are expanded, so `[$(vPath)/Sales.qvd]` still
+  names its file.
+- **Tables are followed, not just statements.** Preceding loads, RESIDENT chains,
+  JOIN, KEEP, CONCATENATE (including Qlik's automatic concatenation of identical
+  field lists), DROP TABLE and RENAME TABLE are all tracked.
+- **Temporary tables don't count.** The app's real data model says which tables
+  survived the reload, so a WHERE or GROUP BY in a scratch table that gets dropped
+  never raises a warning. Without the data model, the script's own DROP statements
+  are used; on all the real scripts tested, both give the same answer.
+- **Each dataset is judged by its own table**: the most direct one if it has
+  several. A summary table built from it later doesn't make the dataset itself
+  "aggregated".
+
+| What happened | Glyph | Example |
 | --- | --- | --- |
-| `GROUP BY` / aggregation (grain change) | critical | ● |
-| `CONCATENATE` (blended rows) | critical | ● |
-| `JOIN` / `KEEP` (blended fields) | alert | ⚠ |
-| `WHERE` (filtered subset) | alert | ⚠ |
-| Field projection or rename (not `LOAD *`) | info | ⓘ |
-| `LOAD *` passthrough, or no attributable statement | none | — |
+| Aggregated | critical ● | `GROUP BY`, or `Sum`, `Count`, `Max`… in the field list |
+| Filtered subset | warning ⚠ | `WHERE`, `WHILE`, `Exists()`, an inner join, `KEEP`, `FIRST n` |
+| Joined with other data | warning ⚠ | another source's fields joined onto this table |
+| Joined into another table | warning ⚠ | this data has no table of its own; it was joined onto another |
+| Combined with other data | warning ⚠ | another source's rows appended (CONCATENATE) |
+| Restructured | warning ⚠ | `CROSSTABLE`, `GENERIC`, `HIERARCHY` |
+| De-duplicated | info ⓘ | `LOAD DISTINCT` |
+| Values changed | info ⓘ | a field recalculated under its own name, e.g. `SalesQuota*10 AS SalesQuota` |
+| Used as a lookup | info ⓘ | only loaded as a mapping table and applied with `ApplyMap` |
+| Not kept in the app | info ⓘ | loaded, then dropped before the reload finished |
+| Rows reduced per user | info ⓘ | the app uses Section Access |
+
+Two different warnings together, such as filtered and joined, make the result
+critical.
+
+Some things deliberately **don't** raise anything, because they don't change any
+value the score measured:
+
+- **Renames and type conversions.** `Code AS ProductCode`, `Text(Code) AS Code`,
+  `Date(Date#(D,'YYYY-MM-DD')) AS D` and `Dual(Month, …) AS Month` are not flagged.
+- **New derived fields.** A new field such as `If(Age < 18, 'Minor', 'Adult') AS
+  AgeBand` leaves the source fields untouched.
+- **Enrichment.** A calendar or INLINE table joined on, or a table joined with
+  fields derived from itself, isn't another dataset.
 
 This is an **inference, not a measurement**. It appears as a glyph and an
 explanation, never as a competing score. You can switch it off in the properties
-panel. It needs the app id and script permission; without them, no glyph is shown.
+panel. It can't see script in include files, variables built from expressions, or
+automatic concatenation when a field list is `LOAD *`. When the viewer can't read
+the script, the app's own lineage statements are used where possible, and
+otherwise no glyph is shown.
+
+## Performance
+
+Several copies of the extension on one sheet, or one copy reloading after a
+settings change, share their requests:
+
+- **One request serves every copy.** Anything in flight or fetched in the last
+  minute is reused: the app's script and data model, catalog listings, Trust
+  Scores, even the security token. Failed requests are never kept.
+- **Sorting is free.** Changing sort order or the number of datasets shown is
+  done in the browser, without asking Qlik again.
+- **Refresh means refresh.** The refresh button in the flyout skips the shared
+  cache and goes back to Qlik.
+- **Field health waits to be asked.** It's fetched per dataset, only when the
+  Field health tab is opened.
+- **The script is read once.** The table model is built once per app and reused
+  for every dataset. A script of a few thousand lines takes tens of milliseconds.
+
+In testing, three copies on one sheet went from 26 requests to 11 at first paint,
+and a sort change went from 7 requests to none.
 
 ## The properties panel
 
@@ -211,7 +300,7 @@ panel. It needs the app id and script permission; without them, no glyph is show
   Score), then the icon or Leonardo name, button style, size and an optional icon
   colour. Fields that don't apply to the chosen source are hidden.
 - **Trust score data.** Demo toggle, dataset scope, space id or dataset ids, sort
-  order, max datasets shown, and the transformation-warnings toggle.
+  order, max datasets shown, and the transformation-insights toggle.
 - **Access.** What to do when the viewer can't see Trust Scores (lock, hide, or
   always show), and a switch to preview the no-access look while Demo data is on.
 - **Settings.** The standard Qlik appearance section.
@@ -228,8 +317,9 @@ trust-score-flyout/
 └── lib/
     ├── api.js                  Qlik Cloud REST calls
     ├── dataAdapter.js          orchestration + normalisation (the data seam)
+    ├── script.js               reads a load script: comments, statements, variables
     ├── lineage.js              which datasets an app loads (lineage graph, then references)
-    ├── transform.js            Tier 1 transformation heuristic
+    ├── transform.js            transformation insights (a model of the script's tables)
     ├── mockData.js             sample data for demo mode
     ├── icons.js                built-in SVG set + Leonardo UI mode + status glyphs
     └── component.js            the interactive UI (button, access check, flyout, drill-down)

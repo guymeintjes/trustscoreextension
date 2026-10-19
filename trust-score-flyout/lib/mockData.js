@@ -56,8 +56,10 @@ define([], function () {
         },
         {
           code: "join",
-          label: "Joined / blended",
-          detail: "Joined with the warehouse dimension, changing the field set."
+          label: "Joined with other data",
+          detail:
+            "Fields from the warehouse dimension are joined onto this table. Depending " +
+            "on the keys, rows can be duplicated or left without matches."
         }
       ]
     },
@@ -66,11 +68,11 @@ define([], function () {
       attributed: true,
       reasons: [
         {
-          code: "projection",
-          label: "Fields reshaped",
+          code: "values",
+          label: "Values changed",
           detail:
-            "The script selects and renames a subset of fields rather than " +
-            "loading the dataset as-is."
+            "The script recalculates SessionDuration under its original name, so the " +
+            "values the app shows aren't the ones the score was computed on."
         }
       ]
     }
@@ -174,10 +176,45 @@ define([], function () {
     }
   ];
 
-  // Decorate with a hub deep-link and the sample transformation state.
+  // Sample field health: [name, type, valid, invalid, empty] out of 1,000
+  // sampled values, as Qlik's field-level data quality check reports them.
+  var FIELDS = {
+    "mock-sales": [
+      ["OrderID", "INTEGER", 1000, 0, 0], ["OrderDate", "DATE", 992, 5, 3],
+      ["CustomerKey", "INTEGER", 985, 0, 15], ["ProductKey", "INTEGER", 990, 10, 0],
+      ["Quantity", "INTEGER", 970, 24, 6], ["UnitPrice", "DOUBLE", 961, 31, 8],
+      ["DiscountPct", "DOUBLE", 902, 18, 80], ["SalesChannel", "STRING", 1000, 0, 0]
+    ],
+    "mock-customer": [
+      ["CustomerID", "INTEGER", 1000, 0, 0], ["CustomerName", "STRING", 994, 0, 6],
+      ["Email", { kind: "SEMANTIC", name: "Email" }, 811, 97, 92],
+      ["Phone", { kind: "SEMANTIC", name: "Phone number" }, 702, 164, 134],
+      ["Country", "STRING", 978, 12, 10], ["Segment", "STRING", 950, 0, 50],
+      ["PostalCode", { kind: "SEMANTIC", name: "Postal code" }, 866, 71, 63]
+    ],
+    "mock-inventory": [
+      ["WarehouseID", "INTEGER", 1000, 0, 0], ["SKU", "STRING", 996, 4, 0],
+      ["SnapshotDate", "DATE", 940, 0, 60], ["OnHandQty", "INTEGER", 701, 212, 87],
+      ["ReservedQty", "INTEGER", 655, 55, 290], ["ReorderPoint", "INTEGER", 512, 23, 465]
+    ],
+    "mock-web": [
+      ["SessionID", "STRING", 1000, 0, 0], ["EventTime", "TIMESTAMP", 880, 66, 54],
+      ["PageURL", { kind: "SEMANTIC", name: "URL" }, 612, 203, 185],
+      ["Referrer", "STRING", 402, 58, 540], ["UserAgent", "STRING", 931, 0, 69],
+      ["SessionDuration", "DOUBLE", 455, 318, 227], ["Country", "STRING", 590, 41, 369]
+    ],
+    "mock-finance": [
+      ["JournalID", "INTEGER", 1000, 0, 0], ["PostingDate", "DATE", 1000, 0, 0],
+      ["Account", "STRING", 998, 2, 0], ["Debit", "DECIMAL", 997, 0, 3],
+      ["Credit", "DECIMAL", 996, 0, 4], ["CostCentre", "STRING", 981, 9, 10]
+    ]
+  };
+
+  // Decorate with a hub deep-link, the sample transformation state and fields.
   return rows.map(function (r) {
     r.openUrl = "https://your-tenant.qlikcloud.com/dataset/" + r.datasetId;
     r.transformation = TRANSFORM[r.datasetId] || null;
+    r.fields = FIELDS[r.datasetId] || null;
     return r;
   });
 });

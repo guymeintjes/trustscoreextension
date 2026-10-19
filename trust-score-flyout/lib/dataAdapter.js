@@ -2,15 +2,22 @@
  * dataAdapter.js
  * The single seam between the UI and the data source. Orchestrates the Qlik
  * Cloud REST calls, joins catalog metadata with trust scores, and normalises
- * everything into the shape the UI renders. Swap `load()` internals here if the
- * data source ever changes; the UI never talks to the API directly.
+ * everything into the shape the UI renders. The UI never talks to the API
+ * directly.
  *
- * load() resolves to { rows, aggregate, visible }. `rows` is the sorted, capped list the
- * flyout renders. `aggregate` is { score, count }: the plain mean Trust Score
- * across every scored dataset in scope, computed BEFORE the maxItems cap so it
- * describes the whole scope rather than the top of the list. `visible` is how
- * many catalog datasets the viewer can see in scope (null when unknown); the
- * UI's access check reads 0 as "nothing is shared with this viewer".
+ * load() resolves to { rows, aggregate, visible }. `rows` is the sorted, capped
+ * list the flyout renders. `aggregate` is { score, count }: the plain mean
+ * Trust Score across every scored dataset in scope, computed BEFORE the
+ * maxItems cap so it describes the whole scope. `visible` is how many catalog
+ * datasets the viewer can see in scope (null when unknown); the UI's access
+ * check reads 0 as "nothing is shared with this viewer".
+ *
+ * Requests are shared. Every copy of the extension on a page asks for the same
+ * app context, catalog pages and scores at the same moment, so each request
+ * goes through memo(): one call in flight or within the last minute serves
+ * them all, failures are never kept, and load({ fresh: true }) (the refresh
+ * button) goes back to Qlik. Sorting and capping happen here, in the browser,
+ * so changing them costs no requests at all.
  *
  * Output row shape:
  * {
@@ -75,15 +82,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
   /** Prefer a friendly/display name, fall back to the technical name. */
   function pickName(item) {
     var friendly = item && item.name;
-    var technical =
-      (item &&
-        item.resourceAttributes &&
-        (item.resourceAttributes.technicalName || item.resourceAttributes.technical_name)) ||
-      null;
-    if (friendly && String(friendly).trim()) {
-      return friendly;
-    }
-    return technical || item.name || "Unnamed dataset";
+    if (friendly && String(friendly).trim()) return friendly;
+    return techName(item) || (item && item.name) || "Unnamed dataset";
   }
 
   function techName(item) {
@@ -103,14 +103,116 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     if (href) return href;
     if (item.id) {
       var origin = "";
-      try { origin = window.location.origin; } catch (e) { origin = ""; }
+      try {
+        origin = window.location.origin;
+      } catch (e) {
+        origin = "";
+      }
       return origin + "/dataset/" + item.id;
     }
     return null;
   }
 
+  // ---------------------------------------------------------------------------
+  // Shared requests
+  // ---------------------------------------------------------------------------
+
+  var TTL_MS = 60000;
+  var _memo = {};
+
+  /** One request per key, shared while in flight and for TTL_MS after. */
+  function memo(key, fresh, fn) {
+    var hit = _memo[key];
+    if (!fresh && hit && Date.now() - hit.at < TTL_MS) return hit.promise;
+    var entry = { at: Date.now() };
+    entry.promise = Promise.resolve()
+      .then(fn)
+      .catch(function (err) {
+        if (_memo[key] === entry) delete _memo[key];
+        throw err;
+      });
+    _memo[key] = entry;
+    return entry.promise;
+  }
+
+  function resetCache() {
+    _memo = {};
+  }
+
+  function forget(prefix) {
+    Object.keys(_memo).forEach(function (k) {
+      if (k.indexOf(prefix) === 0) delete _memo[k];
+    });
+  }
+
+  function appSpace(appId, fresh) {
+    return memo("space:" + appId, fresh, function () {
+      return api.getAppSpaceId(appId);
+    });
+  }
+
+  function spaceDatasets(spaceId, fresh) {
+    return memo("ds:" + spaceId, fresh, function () {
+      return api.listDatasets({ spaceId: spaceId });
+    });
+  }
+
+  /** Every dataset the viewer can see. The slowest call: a last resort. */
+  function allDatasets(fresh) {
+    return memo("ds:*", fresh, function () {
+      return api.listDatasets({});
+    });
+  }
+
+  function scores(ids, fresh) {
+    return memo("ts:" + ids.slice().sort().join(","), fresh, function () {
+      return api.getTrustScores(ids);
+    });
+  }
+
+  /** The app's load script and data-lineage entries (both best-effort). */
+  function appContext(appId, fresh) {
+    return memo("ctx:" + appId, fresh, function () {
+      return Promise.all([
+        api.getAppSources(appId).catch(function () {
+          return [];
+        }),
+        api.getAppScript(appId).catch(function () {
+          return "";
+        })
+      ]).then(function (r) {
+        return { sources: r[0] || [], script: r[1] || "" };
+      });
+    });
+  }
+
+  /**
+   * The script read into a table model for transformation insights, checked
+   * against the tables that actually survived the app's last reload.
+   */
+  function scriptModel(appId, ctx, fresh) {
+    return memo("model:" + appId, fresh, function () {
+      return api
+        .getAppMetadata(appId)
+        .catch(function () {
+          return null;
+        })
+        .then(function (meta) {
+          return transform.analyzeScript(ctx.script, {
+            tables: meta ? meta.tables : null,
+            sectionAccess: !!(meta && meta.sectionAccess),
+            statements: ctx.sources
+          });
+        });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rows
+  // ---------------------------------------------------------------------------
+
   /** Merge one catalog item + its trust score result into a UI row. */
-  function shapeRow(item, ts, ctx, options) {
+  function shapeRow(item, ts, model) {
     var axes = (ts.axes || [])
       // Only enabled axes with a real score. Disabled axes (weight 0) can still
       // carry a score in the API response, so filter on `enabled`, not score.
@@ -156,14 +258,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       transformation: null
     };
 
-    // Tier 1 transformation index (best-effort) when we have app script context.
-    if (options && options.transform !== false && ctx && (ctx.script || ctx.sources.length)) {
-      // The cleaned script: comments and code after Exit Script can't trigger
-      // a warning.
-      var t = transform.analyze(
-        { name: row.name, technicalName: row.technicalName, datasetId: row.datasetId },
-        { script: ctx.cleanScript != null ? ctx.cleanScript : ctx.script, statements: ctx.sources }
-      );
+    if (model) {
+      var t = transform.verdict(model, { name: row.name, technicalName: row.technicalName });
       row.transformation = t.attributed || t.band !== "none" ? t : null;
     }
     return row;
@@ -177,9 +273,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
    *   appId       {string}   current app id (for appLineage/appSpace)
    *   spaceId     {string}   explicit space id (for scope 'space')
    *   datasetIds  {string[]} explicit ids (for scope 'ids')
-   *   transform   {boolean}  compute the Tier 1 transformation index (default true)
+   *   transform   {boolean}  compute transformation insights (default true)
    *   sort        {string}   'scoreDesc' | 'scoreAsc' | 'name'
    *   maxItems    {number}
+   *   fresh       {boolean}  skip the shared cache (the refresh button)
    */
   function load(options) {
     options = options || {};
@@ -190,15 +287,14 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       return Promise.resolve(demo);
     }
 
-    // The app script/sources are needed for the appLineage scope and for the
-    // transformation index. Fetch once, tolerate failure.
-    var needCtx =
-      !!options.appId &&
-      (options.scope === "appLineage" || options.transform !== false);
-    var ctxP = needCtx ? loadAppContext(options.appId) : Promise.resolve(emptyCtx());
+    var fresh = !!options.fresh;
+    if (fresh) forget("fq:"); // a refresh also re-reads field health on demand
+    var wantInsights = options.transform !== false && !!options.appId;
+    var needCtx = !!options.appId && (options.scope === "appLineage" || wantInsights);
+    var ctxP = needCtx ? appContext(options.appId, fresh) : Promise.resolve(emptyCtx());
 
     return ctxP.then(function (ctx) {
-      return resolveDatasetSelection(options, ctx)
+      return resolveDatasetSelection(options, ctx, fresh)
         .then(function (selection) {
           // How many catalog datasets this viewer can see in scope. Null when
           // the catalog lookup failed for a reason other than permission.
@@ -207,16 +303,22 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
           if (!ids.length) {
             return { rows: [], visible: visible };
           }
-          return api.getTrustScores(ids).then(function (scoreMap) {
+          var modelP =
+            wantInsights && (ctx.script || ctx.sources.length)
+              ? scriptModel(options.appId, ctx, fresh).catch(function () {
+                  return null;
+                })
+              : Promise.resolve(null);
+          return Promise.all([scores(ids, fresh), modelP]).then(function (r) {
+            var scoreMap = r[0];
+            var model = r[1];
             var itemsById = {};
             selection.items.forEach(function (it) {
-              if (it && it.resourceId) {
-                itemsById[it.resourceId] = it;
-              }
+              if (it && it.resourceId) itemsById[it.resourceId] = it;
             });
             // Only datasets that actually have a trust score survive.
             var rows = Object.keys(scoreMap).map(function (dsId) {
-              return shapeRow(itemsById[dsId] || null, scoreMap[dsId], ctx, options);
+              return shapeRow(itemsById[dsId] || null, scoreMap[dsId], model);
             });
             return { rows: rows, visible: visible };
           });
@@ -230,27 +332,128 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
   }
 
   function emptyCtx() {
-    return { sources: [], script: "", cleanScript: "" };
+    return { sources: [], script: "" };
   }
 
-  function loadAppContext(appId) {
-    return Promise.all([
-      api.getAppSources(appId).catch(function () { return []; }),
-      api.getAppScript(appId).catch(function () { return ""; })
-    ]).then(function (r) {
-      var script = r[1] || "";
-      return { sources: r[0] || [], script: script, cleanScript: lineage.cleanScript(script) };
+  // ---------------------------------------------------------------------------
+  // Field health (fetched only when someone opens the Field health tab)
+  // ---------------------------------------------------------------------------
+
+  var TYPE_LABELS = {
+    STRING: "text", TEXT: "text", VARCHAR: "text", CHAR: "text",
+    INTEGER: "integer", INT: "integer", LONG: "integer", BIGINT: "integer", SMALLINT: "integer",
+    DOUBLE: "number", FLOAT: "number", DECIMAL: "number", NUMBER: "number", NUMERIC: "number", REAL: "number",
+    BOOLEAN: "yes/no", DATE: "date", TIMESTAMP: "timestamp", DATETIME: "timestamp", TIME: "time"
+  };
+
+  /** A readable type: "text", "integer", "date"... or a semantic type such as "Email". */
+  function typeLabel(t) {
+    if (!t) return "";
+    if (typeof t === "string") return TYPE_LABELS[t.toUpperCase()] || t.toLowerCase();
+    var name = String(t.name || "").trim();
+    if (t.kind === "SEMANTIC") return name || "semantic";
+    return TYPE_LABELS[name.toUpperCase()] || name.toLowerCase();
+  }
+
+  /** Percentages of valid / invalid / missing values for one field. */
+  function fieldHealth(name, type, valid, invalid, empty, total) {
+    valid = Number(valid) || 0;
+    invalid = Number(invalid) || 0;
+    empty = Number(empty) || 0;
+    var n = Number(total) || valid + invalid + empty;
+    if (!n) return { name: name, type: typeLabel(type), total: 0, valid: 0, invalid: 0, missing: 100 };
+    return {
+      name: name,
+      type: typeLabel(type),
+      total: n,
+      valid: (100 * valid) / n,
+      invalid: (100 * invalid) / n,
+      missing: (100 * empty) / n
+    };
+  }
+
+  /** Least healthy first: lowest valid share, then most invalid, then name. */
+  function byHealth(a, b) {
+    return (
+      (a.total ? a.valid : -1) - (b.total ? b.valid : -1) ||
+      b.invalid - a.invalid ||
+      String(a.name).localeCompare(String(b.name))
+    );
+  }
+
+  function healthResult(fields, computedAt) {
+    fields = fields.filter(function (f) {
+      return f && f.name;
+    });
+    if (!fields.length) return { status: "none" };
+    fields.sort(byHealth);
+    var sample = 0;
+    fields.forEach(function (f) {
+      sample = Math.max(sample, f.total);
+    });
+    return { status: "ok", computedAt: computedAt || null, sample: sample, fields: fields };
+  }
+
+  function demoFields(datasetId) {
+    var row = mockData.filter(function (r) {
+      return r.datasetId === datasetId;
+    })[0];
+    if (!row || !row.fields) return { status: "none" };
+    return healthResult(
+      row.fields.map(function (f) {
+        return fieldHealth(f[0], f[1], f[2], f[3], f[4]);
+      }),
+      row.updatedAt
+    );
+  }
+
+  /**
+   * Field health for one dataset, from the latest data quality check Qlik
+   * ran on it. Fetched only when the Field health tab is opened for that
+   * dataset, and shared for a minute. Resolves to
+   *   { status: "ok", computedAt, sample, fields: [{ name, type, total,
+   *     valid, invalid, missing }] }   percentages, least healthy first
+   *   { status: "none" }               no field-level check has run yet
+   *   { status: "denied" }             the viewer can't read it
+   * and rejects on any other failure.
+   */
+  function fieldQuality(datasetId, options) {
+    options = options || {};
+    if (options.demo) return Promise.resolve(demoFields(datasetId));
+    return memo("fq:" + datasetId, !!options.fresh, function () {
+      return api
+        .getFieldQualities([datasetId])
+        .then(function (map) {
+          var res = map[datasetId];
+          if (!res) return { status: "none" };
+          return healthResult(
+            res.fields.map(function (f) {
+              var q = (f && f.quality) || {};
+              var c = q.aggregated || q.type || {};
+              return fieldHealth(f && f.name, f && f.type, c.valid, c.invalid, c.empty, c.total);
+            }),
+            res.computedAt
+          );
+        })
+        .catch(function (err) {
+          if (isDenied(err)) return { status: "denied" };
+          if (err && err.status === 404) return { status: "none" };
+          throw err;
+        });
     });
   }
 
-  function resolveDatasetSelection(options, ctx) {
+  // ---------------------------------------------------------------------------
+  // Which datasets
+  // ---------------------------------------------------------------------------
+
+  function resolveDatasetSelection(options, ctx, fresh) {
     var scope = options.scope || "appSpace";
 
     if (scope === "ids") {
       var ids = (options.datasetIds || []).filter(Boolean);
-      // We still want catalog metadata for nice names/descriptions.
-      return api
-        .listDatasets({})
+      // Catalog metadata gives the rows their names and descriptions.
+      return allDatasets(fresh)
         .then(function (items) {
           var wanted = items.filter(function (it) {
             return ids.indexOf(it.resourceId) !== -1;
@@ -266,39 +469,21 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     }
 
     if (scope === "space") {
-      return api.listDatasets({ spaceId: options.spaceId }).then(toSelection);
+      return spaceDatasets(options.spaceId, fresh).then(toSelection);
     }
 
     if (scope === "all") {
-      return api.listDatasets({}).then(toSelection);
+      return allDatasets(fresh).then(toSelection);
     }
 
     if (scope === "appLineage") {
-      return resolveAppDatasets(options, ctx || emptyCtx());
+      return resolveAppDatasets(options, ctx, fresh);
     }
 
     // Default: datasets in the current app's space.
-    return api.getAppSpaceId(options.appId).then(function (spaceId) {
-      return api
-        .listDatasets(spaceId ? { spaceId: spaceId } : {})
-        .then(toSelection);
+    return appSpace(options.appId, fresh).then(function (spaceId) {
+      return (spaceId ? spaceDatasets(spaceId, fresh) : allDatasets(fresh)).then(toSelection);
     });
-  }
-
-  // Tenant-wide catalog listing: the slowest call, so it is a last resort and
-  // is shared briefly by every copy of the extension on the page.
-  var CATALOG_TTL_MS = 60000;
-  var _catalog = null;
-
-  function wideCatalog() {
-    if (_catalog && Date.now() - _catalog.at < CATALOG_TTL_MS) return _catalog.promise;
-    var entry = { at: Date.now() };
-    entry.promise = api.listDatasets({}).catch(function (err) {
-      if (_catalog === entry) _catalog = null;
-      throw err;
-    });
-    _catalog = entry;
-    return entry.promise;
   }
 
   function dedupe(items) {
@@ -320,7 +505,9 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
             (sources ? " (" + sources + " lineage sources)" : "")
         );
       }
-    } catch (e) { /* logging is never worth failing a load */ }
+    } catch (e) {
+      /* logging is never worth failing a load */
+    }
   }
 
   /**
@@ -330,12 +517,12 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
    *   2. script and data-lineage references by full technical name, same order;
    *   3. every dataset in the app's own space (the original behaviour).
    */
-  function resolveAppDatasets(options, ctx) {
+  function resolveAppDatasets(options, ctx, fresh) {
     var appId = options.appId;
     var refsInfo = lineage.collectReferences(ctx.sources, ctx.script);
 
     return Promise.all([
-      api.getAppSpaceId(appId),
+      appSpace(appId, fresh),
       api.getAppLineageGraph(appId),
       api.findSpaceIdsByName(refsInfo.spaceNames)
     ]).then(function (r) {
@@ -352,10 +539,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
 
       // The app's own space: errors here are real (e.g. a refusal) and
       // propagate. Spaces named in the script: best-effort.
-      var own = appSpaceId ? api.listDatasets({ spaceId: appSpaceId }) : wideCatalog();
+      var own = appSpaceId ? spaceDatasets(appSpaceId, fresh) : allDatasets(fresh);
       var others = Promise.all(
         otherIds.map(function (id) {
-          return api.listDatasets({ spaceId: id }).catch(function () {
+          return spaceDatasets(id, fresh).catch(function () {
             return [];
           });
         })
@@ -367,7 +554,7 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
         var wide = null;
         function getWide() {
           if (!wide) {
-            wide = (appSpaceId ? wideCatalog() : Promise.resolve(ownItems)).catch(function () {
+            wide = (appSpaceId ? allDatasets(fresh) : Promise.resolve(ownItems)).catch(function () {
               return scoped;
             });
           }
@@ -413,6 +600,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Sorting, capping, aggregate
+  // ---------------------------------------------------------------------------
+
   function finalize(rows, options) {
     var sort = options.sort || "scoreDesc";
     rows = rows.filter(function (r) {
@@ -423,12 +614,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     var aggregate = aggregateOf(rows);
 
     rows.sort(function (a, b) {
-      if (sort === "name") {
-        return String(a.name).localeCompare(String(b.name));
-      }
-      if (sort === "scoreAsc") {
-        return a.score - b.score;
-      }
+      if (sort === "name") return String(a.name).localeCompare(String(b.name));
+      if (sort === "scoreAsc") return a.score - b.score;
       return b.score - a.score; // scoreDesc
     });
 
@@ -472,6 +659,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     load: load,
     aggregate: aggregateOf,
     isDenied: isDenied,
+    resetCache: resetCache,
+    fieldQuality: fieldQuality,
     axisLabel: axisLabel,
     metricLabel: metricLabel
   };

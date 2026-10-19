@@ -7,7 +7,7 @@ It's a small Qlik Cloud visualization extension that lives quietly on a sheet as
 button. Click it and an animated flyout slides out showing the **Trust Score** that
 Qlik Cloud Data Governance has computed for each dataset the app uses. Click a
 dataset and you get the full picture: how it scores on each axis, how much each
-axis counts, a link straight to the dataset, and a heads-up when the app's load
+axis counts, how healthy each field is, a link straight to the dataset, and a heads-up when the app's load
 script reshapes the source enough that the score might not tell the whole story.
 
 If you'd rather not click at all, the button can show the **aggregate Trust Score**

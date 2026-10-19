@@ -750,3 +750,126 @@ body.qv-theme-dark .tsf-panel,
     animation: none !important;
   }
 }
+
+/* ---- Drill-down tabs: score breakdown / field health ---------------------- */
+/* Same small uppercase voice as the other section titles; an accent underline
+   marks the active tab and slides in when it changes. */
+.tsf-tabs {
+  display: flex;
+  gap: 18px;
+  margin: 2px 0 10px;
+  border-bottom: 1px solid var(--tsf-border);
+}
+.tsf-tab {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  border: none;
+  background: none;
+  margin: 0;
+  padding: 0 0 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tsf-fg-muted);
+  transition: color 0.15s ease;
+}
+.tsf-tab:hover,
+.tsf-tab.is-active { color: var(--tsf-fg); }
+.tsf-tab::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--tsf-accent);
+  transform: scaleX(0);
+  transition: transform 0.25s var(--tsf-ease);
+}
+.tsf-tab.is-active::after { transform: scaleX(1); }
+.tsf-tab:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tsf-accent) 45%, transparent);
+}
+.tsf-tabpanel[hidden] { display: none; }
+
+/* ---- Field health ---------------------------------------------------------- */
+/* Rows reuse the score-breakdown row: name, a type chip where the weight chip
+   sits, the valid share in the band colour, and a bar in the same track,
+   split into valid / invalid / missing. */
+.tsf-fields-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 9px;
+  font-size: 10.5px;
+  color: var(--tsf-fg-muted);
+}
+.tsf-legend { display: inline-flex; gap: 10px; }
+.tsf-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.tsf-key {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.tsf-key--valid,
+.tsf-fseg--valid { background: var(--tsf-high); }
+.tsf-key--invalid,
+.tsf-fseg--invalid { background: var(--tsf-poor); }
+.tsf-key--missing,
+.tsf-fseg--missing { background: var(--tsf-na); }
+
+.tsf-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 248px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.tsf-fields::-webkit-scrollbar { width: 6px; }
+.tsf-fields::-webkit-scrollbar-thumb { background: var(--tsf-track); border-radius: 6px; }
+.tsf-field-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tsf-fg);
+}
+.tsf-fbar-fill {
+  display: flex;
+  height: 100%;
+  width: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: width 0.6s var(--tsf-ease);
+}
+.tsf-fseg { flex: none; height: 100%; }
+/* A sliver of invalid values should still be visible. */
+.tsf-fseg--invalid { min-width: 2px; }
+.tsf-sk-field { width: 45%; height: 11px; margin-bottom: 6px; }
+.tsf-fields-msg {
+  margin: 4px 0 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--tsf-fg-muted);
+}
+.tsf-fields-msg b { color: var(--tsf-fg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tsf-fbar-fill,
+  .tsf-tab::after { transition-duration: 0.01ms !important; }
+}
