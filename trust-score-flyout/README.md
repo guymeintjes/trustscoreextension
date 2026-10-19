@@ -47,7 +47,8 @@ browser. It runs the real component on sample data, no tenant required.
   ellipsis, even for names without spaces. Hover for the full name, which the
   drill-down also shows in full.
 - **Scope that follows the app.** By default it shows the datasets this app
-  actually loads, worked out from the app's lineage and script.
+  actually loads, taken from Qlik's own lineage graph, in whichever space they
+  live.
 - **Transformation warnings.** A heuristic spots when the load script filters,
   joins or aggregates a dataset, and marks the card with an info, warning or
   critical glyph plus an explanation in the drill-down.
@@ -140,7 +141,9 @@ signed-in user. That user needs `dataset:read` and `dataquality:read`.
 | --- | --- |
 | List datasets | `GET /api/v1/items?resourceType=dataset[&spaceId=…]`. Each item's `resourceId` is the dataset id; `resourceAttributes.secureQri` and `.technicalName` carry the lineage id and source name |
 | Resolve the app's space | `GET /api/v1/apps/{appId}` → `attributes.spaceId` |
+| What the app loads (exact) | `GET /api/v1/lineage-graphs/nodes/qri:app:sense://{appId}?level=resource&up=1` |
 | App source references | `GET /api/v1/apps/{appId}/data/lineage` |
+| Spaces named in `lib://` paths | `GET /api/v1/spaces?name=…` |
 | App load script | `GET /api/v1/apps/{appId}/scripts` → `…/scripts/{scriptId}` → `{ script }` |
 | Trust scores | `POST /api/data-governance/trust-scores/results/data-sets/actions/filter` with `{ datasetIds }` |
 | CSRF (for the POST) | `GET /api/v1/csrf-token` → `qlik-csrf-token` header |
@@ -156,11 +159,24 @@ because the API can return a score on a disabled, zero-weight axis.
 
 Set the **Dataset scope** in the properties panel:
 
-- **Datasets used by this app** (default). Matches the app's load-script sources
-  (from the lineage endpoint and the script text) to governed datasets by technical
-  name. It's best-effort: if the app only loads ungoverned files such as raw QVDs,
-  it **falls back to the app's space**. Apps don't carry a lineage `secureQri`, so
-  matching references like this is the reliable app-centric approach.
+- **Datasets used by this app** (default). Apps often load their data from a
+  different space, such as a data or transformation space feeding an analytics
+  space, so this looks wherever the datasets live. It tries three routes in turn:
+  1. **Qlik's lineage graph.** Qlik records every source an app loads when it
+     reloads, so this is exact. Those sources are matched to catalog datasets
+     by their lineage ID (`secureQri`).
+  2. **The app's own references**, when the lineage graph isn't available to the
+     viewer or Qlik throttles it. The `lib://` paths and SQL tables in the script
+     and the app's data-lineage entries are matched to datasets by full technical
+     name. The space in `lib://Space:Connection/…` picks the right copy when the
+     same file name exists in several spaces, and an ambiguous name is skipped
+     rather than guessed. Comments and anything after `Exit Script` don't count.
+  3. **Every dataset in the app's own space**, if nothing referenced matches.
+
+  Each load writes one line to the browser console saying which route found the
+  datasets and how many, for example `[Trust Score Flyout] app …: 9 dataset(s)
+  via lineage graph`. That's the first thing to check when a dashboard shows
+  fewer datasets than you expect.
 - **Datasets in this app's space.** Every scored dataset in the space.
 - **A specific space.** Paste a Space ID.
 - **All datasets I can access.**
@@ -171,9 +187,10 @@ Set the **Dataset scope** in the properties panel:
 A Trust Score describes the **source** dataset. If the app's load script reshapes
 that data on the way in, the score may no longer describe what the app actually
 shows. This heuristic scans the load script (and the lineage statements),
-attributes statements to a dataset by the leaf of its technical name (deliberately
-conservative, so a sibling table doesn't get flagged by mistake), and raises a
-banded caveat:
+attributes statements to a dataset by the leaf of its technical name: the file
+or table name without its extension, matched as a whole word, so
+`Final_Product` never claims a load of `Final_ProductInventory`. Comments and
+code after `Exit Script` are ignored. It then raises a banded caveat:
 
 | Signal in the script | Band | Glyph |
 | --- | --- | --- |
@@ -211,7 +228,7 @@ trust-score-flyout/
 └── lib/
     ├── api.js                  Qlik Cloud REST calls
     ├── dataAdapter.js          orchestration + normalisation (the data seam)
-    ├── lineage.js              match app sources → governed datasets (appLineage)
+    ├── lineage.js              which datasets an app loads (lineage graph, then references)
     ├── transform.js            Tier 1 transformation heuristic
     ├── mockData.js             sample data for demo mode
     ├── icons.js                built-in SVG set + Leonardo UI mode + status glyphs
@@ -244,4 +261,5 @@ drill-down hint is remembered; **Show the hint again** brings it back.
 - It respects `prefers-reduced-motion` and works in both light and dark themes.
 - Endpoint shapes were checked against a live Qlik Cloud tenant (Aug 2026): dataset
   items carry `secureQri` and `technicalName` but no `links.open`, so the hub link
-  is built as `{origin}/dataset/{item.id}`; apps have no `secureQri`.
+  is built as `{origin}/dataset/{item.id}`. Apps have no `secureQri` in the
+  catalog, but their lineage QRI is simply `qri:app:sense://` plus the app id.

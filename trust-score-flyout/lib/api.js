@@ -13,12 +13,15 @@
  *   - GET  /api/v1/apps/{appId}/data/lineage                                    (app source references)
  *   - GET  /api/v1/apps/{appId}/scripts + /scripts/{scriptId}                   (load-script text)
  *   - POST /api/data-governance/trust-scores/results/data-sets/actions/filter   (trust scores)
+ *   - GET  /api/v1/lineage-graphs/nodes/{appQri}?level=resource&up=1             (what the app loads)
+ *   - GET  /api/v1/spaces?name=...                                              (space name -> id)
  *
  * Note: dataset catalog items expose resourceAttributes.secureQri (the lineage
  * node id) and resourceAttributes.technicalName. Dataset items have NO
  * links.open, so the hub deep-link is built as {origin}/dataset/{item.id}.
- * Apps have no secureQri, so "datasets in this app" is resolved from the app's
- * data-lineage source references, not the lineage graph.
+ * An app's lineage QRI is "qri:app:sense://" + its id, and its lineage graph
+ * lists the datasets it loads, from any space. That is the exact route for
+ * "datasets used by this app"; source-reference matching is the fallback.
  */
 define([], function () {
   "use strict";
@@ -31,6 +34,12 @@ define([], function () {
     "/api/data-governance/trust-scores/results/data-sets/actions/filter";
 
   var ITEMS_PATH = "/api/v1/items";
+  var LINEAGE_PATH = "/api/v1/lineage-graphs/nodes/";
+  var SPACES_PATH = "/api/v1/spaces";
+  // The lineage API allows ~20 calls a minute, so each app's graph is fetched
+  // once per page and shared by every copy of the extension. A failed fetch is
+  // retried no sooner than this.
+  var LINEAGE_RETRY_MS = 60000;
   var APPS_PATH = "/api/v1/apps";
   var CSRF_PATH = "/api/v1/csrf-token";
 
@@ -296,7 +305,98 @@ define([], function () {
       });
   }
 
+  var _lineage = {};
+
+  function getJson(url) {
+    return fetch(url, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { accept: "application/json" }
+    }).then(jsonOrThrow);
+  }
+
+  /**
+   * The app's resource-level lineage graph, one level up: the sources it loads.
+   * Resolves to the raw body, or null when unavailable (no access, throttled,
+   * not found). Never rejects: a lineage refusal says nothing about access to
+   * Trust Scores, so it must not reach the access check.
+   */
+  function getAppLineageGraph(appId) {
+    if (!appId) return Promise.resolve(null);
+    var c = _lineage[appId];
+    if (c && (c.ok || Date.now() - c.at < LINEAGE_RETRY_MS)) return c.promise;
+
+    var qri = "qri:app:sense://" + appId;
+    var query = "?level=resource&up=1&collapse=true";
+    var entry = { at: Date.now(), ok: false };
+    // The docs don't say how the QRI is encoded in the path. Try full encoding
+    // first, then the raw form (a "#" must always be escaped or the browser
+    // treats it as a fragment).
+    entry.promise = getJson(LINEAGE_PATH + encodeURIComponent(qri) + query)
+      .catch(function (err) {
+        if (err && (err.status === 400 || err.status === 404)) {
+          return getJson(LINEAGE_PATH + qri.replace(/#/g, "%23") + query);
+        }
+        throw err;
+      })
+      .then(function (body) {
+        entry.ok = true;
+        return body;
+      })
+      .catch(function () {
+        return null;
+      });
+    _lineage[appId] = entry;
+    return entry.promise;
+  }
+
+  var _spaceIds = {};
+
+  /**
+   * Resolve space names (as written in lib://Space:Connection/...) to ids.
+   * Resolves to { lower-cased name: [ids] } for the names that matched
+   * exactly. Never rejects; an unresolved name is simply absent.
+   */
+  function findSpaceIdsByName(names) {
+    var wanted = {};
+    (names || []).forEach(function (n) {
+      if (n && String(n).trim()) wanted[String(n).trim().toLowerCase()] = String(n).trim();
+    });
+    var keys = Object.keys(wanted);
+    return Promise.all(
+      keys.map(function (k) {
+        if (!_spaceIds[k]) {
+          _spaceIds[k] = getJson(SPACES_PATH + "?limit=100&name=" + encodeURIComponent(wanted[k]))
+            .then(function (body) {
+              return ((body && body.data) || [])
+                .filter(function (s) {
+                  return s && s.id && String(s.name || "").trim().toLowerCase() === k;
+                })
+                .map(function (s) {
+                  return s.id;
+                });
+            })
+            .catch(function () {
+              delete _spaceIds[k]; // let a later load try again
+              return [];
+            });
+        }
+        return _spaceIds[k].then(function (ids) {
+          return [k, ids];
+        });
+      })
+    ).then(function (pairs) {
+      var map = {};
+      pairs.forEach(function (pr) {
+        if (pr[1] && pr[1].length) map[pr[0]] = pr[1];
+      });
+      return map;
+    });
+  }
+
   return {
+    getAppLineageGraph: getAppLineageGraph,
+    findSpaceIdsByName: findSpaceIdsByName,
     getAppSpaceId: getAppSpaceId,
     getAppSources: getAppSources,
     getAppScript: getAppScript,

@@ -158,9 +158,11 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
 
     // Tier 1 transformation index (best-effort) when we have app script context.
     if (options && options.transform !== false && ctx && (ctx.script || ctx.sources.length)) {
+      // The cleaned script: comments and code after Exit Script can't trigger
+      // a warning.
       var t = transform.analyze(
         { name: row.name, technicalName: row.technicalName, datasetId: row.datasetId },
-        { script: ctx.script, statements: ctx.sources }
+        { script: ctx.cleanScript != null ? ctx.cleanScript : ctx.script, statements: ctx.sources }
       );
       row.transformation = t.attributed || t.band !== "none" ? t : null;
     }
@@ -228,7 +230,7 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
   }
 
   function emptyCtx() {
-    return { sources: [], script: "" };
+    return { sources: [], script: "", cleanScript: "" };
   }
 
   function loadAppContext(appId) {
@@ -236,7 +238,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       api.getAppSources(appId).catch(function () { return []; }),
       api.getAppScript(appId).catch(function () { return ""; })
     ]).then(function (r) {
-      return { sources: r[0] || [], script: r[1] || "" };
+      var script = r[1] || "";
+      return { sources: r[0] || [], script: script, cleanScript: lineage.cleanScript(script) };
     });
   }
 
@@ -271,23 +274,7 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     }
 
     if (scope === "appLineage") {
-      // Datasets the app actually references, matched against the app's space
-      // catalog. Falls back to the whole app space if nothing matches (e.g. the
-      // app loads QVDs that are not governed datasets).
-      return api.getAppSpaceId(options.appId).then(function (spaceId) {
-        return api
-          .listDatasets(spaceId ? { spaceId: spaceId } : {})
-          .then(function (items) {
-            var ids = lineage.appDatasetIds(items, ctx && ctx.sources, ctx && ctx.script);
-            if (ids.length) {
-              var wanted = items.filter(function (it) {
-                return ids.indexOf(it.resourceId) !== -1;
-              });
-              return { items: wanted, ids: ids };
-            }
-            return toSelection(items);
-          });
-      });
+      return resolveAppDatasets(options, ctx || emptyCtx());
     }
 
     // Default: datasets in the current app's space.
@@ -295,6 +282,123 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       return api
         .listDatasets(spaceId ? { spaceId: spaceId } : {})
         .then(toSelection);
+    });
+  }
+
+  // Tenant-wide catalog listing: the slowest call, so it is a last resort and
+  // is shared briefly by every copy of the extension on the page.
+  var CATALOG_TTL_MS = 60000;
+  var _catalog = null;
+
+  function wideCatalog() {
+    if (_catalog && Date.now() - _catalog.at < CATALOG_TTL_MS) return _catalog.promise;
+    var entry = { at: Date.now() };
+    entry.promise = api.listDatasets({}).catch(function (err) {
+      if (_catalog === entry) _catalog = null;
+      throw err;
+    });
+    _catalog = entry;
+    return entry.promise;
+  }
+
+  function dedupe(items) {
+    var seen = {};
+    return (items || []).filter(function (it) {
+      var k = it && (it.resourceId || it.id);
+      if (!k || seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+  }
+
+  /** One console line per load saying how the app's datasets were found. */
+  function report(appId, via, count, sources) {
+    try {
+      if (typeof console !== "undefined" && console.info) {
+        console.info(
+          "[Trust Score Flyout] app " + appId + ": " + count + " dataset(s) via " + via +
+            (sources ? " (" + sources + " lineage sources)" : "")
+        );
+      }
+    } catch (e) { /* logging is never worth failing a load */ }
+  }
+
+  /**
+   * "Datasets used by this app", from whichever space they live in. In order:
+   *   1. the app's lineage graph (exact): its sources, matched to catalog items
+   *      in the app's space and the spaces its script names, then tenant-wide;
+   *   2. script and data-lineage references by full technical name, same order;
+   *   3. every dataset in the app's own space (the original behaviour).
+   */
+  function resolveAppDatasets(options, ctx) {
+    var appId = options.appId;
+    var refsInfo = lineage.collectReferences(ctx.sources, ctx.script);
+
+    return Promise.all([
+      api.getAppSpaceId(appId),
+      api.getAppLineageGraph(appId),
+      api.findSpaceIdsByName(refsInfo.spaceNames)
+    ]).then(function (r) {
+      var appSpaceId = r[0];
+      var qris = lineage.upstreamQris(r[1], lineage.appQri(appId));
+      var spaceIdsByName = r[2] || {};
+
+      var otherIds = [];
+      Object.keys(spaceIdsByName).forEach(function (k) {
+        spaceIdsByName[k].forEach(function (id) {
+          if (id !== appSpaceId && otherIds.indexOf(id) === -1) otherIds.push(id);
+        });
+      });
+
+      // The app's own space: errors here are real (e.g. a refusal) and
+      // propagate. Spaces named in the script: best-effort.
+      var own = appSpaceId ? api.listDatasets({ spaceId: appSpaceId }) : wideCatalog();
+      var others = Promise.all(
+        otherIds.map(function (id) {
+          return api.listDatasets({ spaceId: id }).catch(function () {
+            return [];
+          });
+        })
+      );
+
+      return Promise.all([own, others]).then(function (lists) {
+        var ownItems = lists[0] || [];
+        var scoped = dedupe([].concat.apply(ownItems, lists[1]));
+        var wide = null;
+        function getWide() {
+          if (!wide) {
+            wide = (appSpaceId ? wideCatalog() : Promise.resolve(ownItems)).catch(function () {
+              return scoped;
+            });
+          }
+          return wide;
+        }
+        function done(items, via) {
+          items = dedupe(items);
+          report(appId, via, items.length, qris.length);
+          return toSelection(items);
+        }
+
+        var exact = qris.length ? lineage.itemsForQris(scoped, qris) : [];
+        if (exact.length) return done(exact, "lineage graph");
+
+        var viaWide = qris.length
+          ? getWide().then(function (all) {
+              return lineage.itemsForQris(all, qris);
+            })
+          : Promise.resolve([]);
+
+        return viaWide.then(function (found) {
+          if (found.length) return done(found, "lineage graph");
+          var refs = lineage.matchReferences(scoped, refsInfo, appSpaceId, spaceIdsByName);
+          if (refs.length) return done(refs, "script references");
+          return getWide().then(function (all) {
+            var wideRefs = lineage.matchReferences(all, refsInfo, appSpaceId, spaceIdsByName);
+            if (wideRefs.length) return done(wideRefs, "script references");
+            return done(ownItems, "the app's own space (nothing referenced matched)");
+          });
+        });
+      });
     });
   }
 

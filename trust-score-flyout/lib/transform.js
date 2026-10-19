@@ -108,12 +108,19 @@ define([], function () {
     return out;
   }
 
+  // File extensions to drop before taking the leaf. Without this the dot split
+  // makes "Final_Customer.qvd" end in "qvd", and every QVD load in the script
+  // would be blamed on every QVD dataset.
+  var FILE_EXT = /\.(qvd|qvx|csv|tsv|tab|txt|dat|parquet|avro|orc|xlsx?|xml|json|kml|html?)\s*$/i;
+
   function leafOf(technicalName) {
     if (!technicalName) return null;
     var segs = String(technicalName)
+      .trim()
+      .replace(FILE_EXT, "")
       .split(/['"`.,/\\()\[\]{}:;#\s]+/)
       .map(function (s) {
-        return s.trim().replace(/\.(qvd|csv|parquet|xlsx?|txt|json)$/i, "");
+        return s.trim();
       })
       .filter(function (s) {
         return s.length >= 3 && !STOP[s.toLowerCase()] && !/^\d+$/.test(s);
@@ -147,11 +154,16 @@ define([], function () {
     var tokens = matchTokens(dataset);
     if (!tokens.length) return result;
 
-    // Statement chunks that reference this dataset.
+    // Statement chunks that reference this dataset, as a whole name: the leaf
+    // "Final_Product" must not claim a load of "Final_ProductInventory".
+    var patterns = tokens.map(function (t) {
+      var esc = String(t).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp("(^|[^a-z0-9_])" + esc + "($|[^a-z0-9_])");
+    });
     var matched = chunks.filter(function (c) {
       var text = c.toLowerCase();
-      return tokens.some(function (t) {
-        return text.indexOf(t.toLowerCase()) !== -1;
+      return patterns.some(function (re) {
+        return re.test(text);
       });
     });
     if (!matched.length) return result;
