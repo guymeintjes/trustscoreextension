@@ -13,6 +13,8 @@ folds away again.
 
 The button itself can be an icon, or it can show the **aggregate Trust Score**
 across all the datasets, so the headline number is visible without opening anything.
+And if someone opens the sheet without permission to see Trust Scores, the button
+**locks or hides itself** rather than leading them to an error.
 
 Want to see it before you install it? Open [`preview.html`](preview.html) in a
 browser. It runs the real component on sample data, no tenant required.
@@ -26,6 +28,9 @@ browser. It runs the real component on sample data, no tenant required.
 - **An aggregate score at a glance.** In score mode the button becomes the same
   banded ring the flyout uses, showing the plain average of every scored dataset in
   scope. More on how that number is built below.
+- **Checks access first.** When the sheet opens, the extension finds out whether
+  the person viewing it can actually see Trust Scores. If they can't, it shows a
+  padlock or hides the button, whichever you prefer.
 - **A flyout that feels alive.** Spring-eased open and close, cards that stagger
   in, animated rings, and a drill-down that slides open rather than jumping.
 - **One card per dataset.** A colour-banded ring (green, amber, orange, red), the
@@ -57,17 +62,67 @@ knowing about that number:
 - **It covers the whole scope.** The **Max datasets shown** setting only caps the
   cards in the flyout. The aggregate always averages every scored dataset in
   scope, so turning the cap down never flatters the headline.
-- **It loads with the sheet.** An icon can wait for a click, but a score can't, so
-  in score mode the extension fetches Trust Scores as soon as it paints. While
-  it's waiting the ring pulses with a `…`. If the fetch fails it shows `!`, and if
-  nothing in scope has a score it shows `–`. Opening the flyout shows the full
-  error and a refresh button.
+- **It loads with the sheet.** While it's waiting the ring pulses with a `…`. If
+  the fetch fails it shows `!`, and if nothing in scope has a score it shows `–`.
+  Opening the flyout shows the full error and a refresh button.
 - **It only animates when the number changes.** Routine repaints (resizing,
   nudging a property) redraw the ring instantly rather than replaying the fill.
 
 In score mode the icon picker, Leonardo name and icon colour disappear from the
 properties panel because they no longer do anything. Style and size stay, since
 they still shape the ring.
+
+## When a viewer can't see Trust Scores
+
+Not everyone who opens the sheet will be allowed to see dataset quality. Rather
+than handing those people a button that only leads to an error, the extension
+checks first.
+
+As soon as the sheet opens, it loads the Trust Scores for this object's scope as
+the person viewing it. What comes back tells it all it needs to know:
+
+| What Qlik Cloud says | What the extension makes of it |
+| --- | --- |
+| Scores came back | All good. The button works as normal |
+| The request was refused (HTTP 401 or 403) | No permission to read datasets or data quality |
+| The catalog shows no datasets in scope at all | The datasets live somewhere this person can't see |
+| Datasets are visible but none has a score yet | Not an access problem, so the button stays normal |
+| Anything else: a timeout, a server error, a network blip | Unclear, so it gives the benefit of the doubt |
+
+You decide what happens when access is missing, under **Access** in the
+properties panel:
+
+- **Show a locked button** (the default). The icon fades and picks up a small
+  padlock. In score mode the ring shows a padlock where the number would be.
+  Clicking it opens the flyout with a short note on what's missing and who to ask.
+- **Hide the button.** Viewers without access don't see it at all. While the check
+  is running the button stays invisible, so it never flashes up and vanishes. In
+  edit mode it stays visible, faded with a dashed outline, so you can still select
+  and configure it. Turn off **Show titles** under Appearance so nothing of the
+  object shows.
+- **Always show (no check).** No check at all. Scores load on first click, as
+  they used to, and a viewer without access sees an error in the flyout.
+
+A few things worth knowing:
+
+- **It tests the real thing.** Qlik Cloud roles and custom roles differ from
+  tenant to tenant, so rather than guessing from role names, the check asks the
+  same APIs the flyout uses. If those answer, the viewer has what they need.
+- **It catches space access too.** The most common reason someone can't see a
+  score isn't a missing role. It's that the datasets live in a space they can't
+  open. Qlik doesn't refuse that request, it quietly returns nothing, which is
+  why an empty catalog counts as no access.
+- **It never locks people out by accident.** Only a clear refusal or an empty
+  catalog locks the button. A slow or flaky network never does. In hide mode,
+  if no answer arrives within six seconds, the button appears anyway.
+- **CSRF hiccups don't count.** A 403 caused by a missing or rejected CSRF token
+  is treated as an ordinary error, not as a lack of permission.
+- **The flyout opens instantly.** With the check on, the scores load when the
+  sheet opens instead of on first click, so they're already there when someone
+  clicks. The cost is that load happening for every viewer, clicked or not.
+- **Try it without a second account.** Turn on **Demo data**, then switch on
+  **Preview as a viewer without access** under Access. Flip the sheet between edit
+  and analysis mode to see both versions of hide mode.
 
 ## Where the data comes from
 
@@ -133,6 +188,8 @@ panel. It needs the app id and script permission; without them, no glyph is show
   colour. Fields that don't apply to the chosen source are hidden.
 - **Trust score data.** Demo toggle, dataset scope, space id or dataset ids, sort
   order, max datasets shown, and the transformation-warnings toggle.
+- **Access.** What to do when the viewer can't see Trust Scores (lock, hide, or
+  always show), and a switch to preview the no-access look while Demo data is on.
 - **Settings.** The standard Qlik appearance section.
 
 ## Project layout
@@ -151,7 +208,7 @@ trust-score-flyout/
     ├── transform.js            Tier 1 transformation heuristic
     ├── mockData.js             sample data for demo mode
     ├── icons.js                built-in SVG set + Leonardo UI mode + status glyphs
-    └── component.js            the interactive UI (button, flyout, KPI, drill-down)
+    └── component.js            the interactive UI (button, access check, flyout, drill-down)
 ```
 
 ## Preview locally
@@ -159,7 +216,9 @@ trust-score-flyout/
 Open `preview.html` in a browser (it needs internet access for the RequireJS CDN).
 It loads the real `component.js` in demo mode, the very same component the
 extension ships. Use the controls under the toolbar to switch between an icon and
-the aggregate score, change the style and size, and try the sort orders.
+the aggregate score, change the style and size, and try the sort orders. Set
+**Viewer** to *no access* to see the locked or hidden button, and tick **Edit
+mode** to see how hide mode looks to an author.
 
 ## Install to Qlik Cloud
 

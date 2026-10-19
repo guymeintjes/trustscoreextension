@@ -5,10 +5,12 @@
  * everything into the shape the UI renders. Swap `load()` internals here if the
  * data source ever changes; the UI never talks to the API directly.
  *
- * load() resolves to { rows, aggregate }. `rows` is the sorted, capped list the
+ * load() resolves to { rows, aggregate, visible }. `rows` is the sorted, capped list the
  * flyout renders. `aggregate` is { score, count }: the plain mean Trust Score
  * across every scored dataset in scope, computed BEFORE the maxItems cap so it
- * describes the whole scope rather than the top of the list.
+ * describes the whole scope rather than the top of the list. `visible` is how
+ * many catalog datasets the viewer can see in scope (null when unknown); the
+ * UI's access check reads 0 as "nothing is shared with this viewer".
  *
  * Output row shape:
  * {
@@ -181,7 +183,9 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     options = options || {};
 
     if (options.demo) {
-      return Promise.resolve(finalize(mockData.slice(), options));
+      var demo = finalize(mockData.slice(), options);
+      demo.visible = mockData.length;
+      return Promise.resolve(demo);
     }
 
     // The app script/sources are needed for the appLineage scope and for the
@@ -194,9 +198,12 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     return ctxP.then(function (ctx) {
       return resolveDatasetSelection(options, ctx)
         .then(function (selection) {
+          // How many catalog datasets this viewer can see in scope. Null when
+          // the catalog lookup failed for a reason other than permission.
+          var visible = selection.catalogUnknown ? null : selection.items.length;
           var ids = selection.ids;
           if (!ids.length) {
-            return [];
+            return { rows: [], visible: visible };
           }
           return api.getTrustScores(ids).then(function (scoreMap) {
             var itemsById = {};
@@ -206,13 +213,16 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
               }
             });
             // Only datasets that actually have a trust score survive.
-            return Object.keys(scoreMap).map(function (dsId) {
+            var rows = Object.keys(scoreMap).map(function (dsId) {
               return shapeRow(itemsById[dsId] || null, scoreMap[dsId], ctx, options);
             });
+            return { rows: rows, visible: visible };
           });
         })
-        .then(function (rows) {
-          return finalize(rows, options);
+        .then(function (r) {
+          var out = finalize(r.rows, options);
+          out.visible = r.visible;
+          return out;
         });
     });
   }
@@ -244,8 +254,11 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
           });
           return { items: wanted, ids: ids };
         })
-        .catch(function () {
-          return { items: [], ids: ids };
+        .catch(function (err) {
+          // A refusal is an answer for the access check; anything else just
+          // means we lack catalog metadata for these ids.
+          if (isDenied(err)) throw err;
+          return { items: [], ids: ids, catalogUnknown: true };
         });
     }
 
@@ -340,9 +353,21 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     return { score: sum / scored.length, count: scored.length };
   }
 
+  /**
+   * Did Qlik Cloud refuse this request for lack of permission? A 403 caused by
+   * a missing or rejected CSRF token is plumbing, not a permission decision,
+   * so it doesn't count.
+   */
+  function isDenied(err) {
+    if (!err || (err.status !== 401 && err.status !== 403)) return false;
+    if (err.csrfSuspect) return false;
+    return !/csrf/i.test(String(err.message || ""));
+  }
+
   return {
     load: load,
     aggregate: aggregateOf,
+    isDenied: isDenied,
     axisLabel: axisLabel,
     metricLabel: metricLabel
   };

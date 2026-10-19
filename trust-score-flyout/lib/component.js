@@ -6,8 +6,12 @@
  * the animated drill-down detail view.
  *
  * The trigger is either an icon or, in "score" mode, a ring showing the
- * aggregate Trust Score across every scored dataset in scope. Score mode needs
- * data before the panel is ever opened, so it loads on first paint.
+ * aggregate Trust Score across every scored dataset in scope.
+ *
+ * Access check: unless it is switched off (noAccess "show"), data loads as soon
+ * as the object paints, as the viewing user, and the outcome decides whether
+ * that viewer can use the button. A clear refusal (401/403) or an empty catalog
+ * locks or hides it. Anything ambiguous (network, 5xx, timeout) fails open.
  *
  * One instance lives per extension object and persists across repaints, so
  * open/selection state and running animations survive Qlik re-rendering.
@@ -17,6 +21,28 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
   var uid = 0;
   var BANDS = ["high", "mid", "low", "poor", "na"];
+
+  // In "hide" mode the button stays invisible while access is being checked,
+  // so viewers without access never see it flash up and vanish. If no answer
+  // arrives within this window, show it anyway (fail open).
+  var REVEAL_AFTER_MS = 6000;
+
+  // Copy for the two "can't use this" outcomes: tooltip suffix + panel message.
+  var ACCESS_TEXT = {
+    denied: {
+      tip: "you don’t have access",
+      title: "You don’t have access to Trust Scores",
+      sub: "Qlik Cloud declined to share dataset or data quality information with your account.",
+      hint: "Ask a tenant admin for permission to view datasets and their data quality."
+    },
+    noDatasets: {
+      tip: "no datasets are shared with you",
+      title: "No datasets to show",
+      sub: "Your account can’t see any datasets here. Either there are none, or they " +
+        "live in a space you don’t have access to.",
+      hint: "Ask for access to the space that holds this app’s datasets."
+    }
+  };
 
   function h(tag, cls, html) {
     var el = document.createElement(tag);
@@ -65,12 +91,17 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       selectedId: null,
       data: null,
       aggregate: null,
+      visible: null,   // catalog datasets the viewer can see in scope (null = unknown)
+      denied: false,   // last load was refused for lack of permission
       loading: false,
       error: null,
       loadedKey: null
     };
     this._req = 0;             // in-flight request token (stale responses are dropped)
     this._triggerScore = null; // last rounded score drawn on the trigger ring
+    this._revealTimer = null;  // hide-mode fail-open timer
+    this._revealAnyway = false;
+    this._wasPending = false;
     this._onDocDown = this._onDocDown.bind(this);
     this._onReposition = this._onReposition.bind(this);
     this._buildTrigger();
@@ -91,10 +122,12 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
     this._renderTrigger();
 
-    // The flyout loads lazily on open, but the score trigger needs data on the
-    // sheet itself. Never re-fire on a plain repaint while a load is running or
-    // after an error (the refresh button / reopening the panel retries those).
-    var wantsData = this.state.open || this.opts.iconMode === "score";
+    // The flyout alone could load lazily on open, but the score trigger and the
+    // access check both need data on the sheet itself. Never re-fire on a plain
+    // repaint while a load is running or after an error (the refresh button
+    // retries those).
+    var wantsData =
+      this.state.open || this.opts.iconMode === "score" || this._checksAccess();
     var canLoad =
       !this.state.data && !this.state.loading && (dataChanged || !this.state.error);
     if (wantsData && canLoad) {
@@ -108,7 +141,11 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   Component.prototype.destroy = function () {
     this._closePanel(true);
     this._req++;
-    if (this.host) this.host.innerHTML = "";
+    this._clearRevealTimer();
+    if (this.host) {
+      this.host.classList.remove("tsf-host--hidden");
+      this.host.innerHTML = "";
+    }
   };
 
   Component.prototype._dataKey = function (o) {
@@ -129,10 +166,52 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   Component.prototype._invalidate = function () {
     this.state.data = null;
     this.state.aggregate = null;
+    this.state.visible = null;
+    this.state.denied = false;
     this.state.loadedKey = null;
     this.state.error = null;
     this.state.loading = false;
+    this._revealAnyway = false;
     this._req++;
+  };
+
+  // ---------------------------------------------------------------------------
+  // Access
+  // ---------------------------------------------------------------------------
+
+  /** What to do when the viewer lacks access: "lock" (default), "hide" or "show". */
+  Component.prototype._noAccessMode = function () {
+    var m = this.opts.noAccess;
+    return m === "hide" || m === "show" ? m : "lock";
+  };
+
+  Component.prototype._checksAccess = function () {
+    return this._noAccessMode() !== "show";
+  };
+
+  /**
+   * Can the viewer use this button? Derived from the latest load, never guessed
+   * from role names, so it holds across tenants and custom roles:
+   *   ok          scores came back, or datasets are visible but not scored yet
+   *   denied      Qlik refused the request (401/403, not a CSRF hiccup)
+   *   noDatasets  the catalog shows this viewer no datasets in scope
+   *   unknown     some other failure; treated like ok (fail open)
+   *   checking    no answer yet
+   */
+  Component.prototype._accessStatus = function () {
+    var o = this.opts;
+    var s = this.state;
+    if (!this._checksAccess()) return "ok";
+    if (o.demo && o.simulateNoAccess) return "denied";
+    if (s.denied) return "denied";
+    if (s.data) return s.data.length === 0 && s.visible === 0 ? "noDatasets" : "ok";
+    if (s.error) return "unknown";
+    return "checking";
+  };
+
+  Component.prototype._isBlocked = function () {
+    var st = this._accessStatus();
+    return st === "denied" || st === "noDatasets";
   };
 
   // ---------------------------------------------------------------------------
@@ -154,23 +233,34 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     var o = this.opts;
     var t = this.trigger;
     var isScore = o.iconMode === "score";
+    var status = this._accessStatus();
+    var blocked = status === "denied" || status === "noDatasets";
+    var hideMode = this._noAccessMode() === "hide";
+    // Stay reachable while the panel is open, and in edit mode so the author
+    // can still select and configure the object.
+    var hidden = blocked && hideMode && !o.editMode && !this.state.open;
+    var ghost = blocked && hideMode && !!o.editMode;
+    var pending =
+      status === "checking" && hideMode && !o.editMode && !this._revealAnyway;
 
+    this.host.classList.toggle("tsf-host--hidden", hidden);
+    this._setPending(pending);
+    t.classList.toggle("tsf-trigger--locked", blocked);
+    t.classList.toggle("tsf-trigger--ghost", ghost);
     t.classList.toggle("tsf-trigger--score", isScore);
     t.classList.toggle("tsf-trigger--chip", o.triggerStyle === "chip");
     t.classList.toggle("tsf-trigger--bare", o.triggerStyle !== "chip");
     t.style.setProperty("--tsf-icon-size", (o.iconSize || 28) + "px");
 
     var label;
-    if (isScore) {
+    if (blocked) {
+      label = this._renderLockedTrigger(status, isScore, ghost);
+    } else if (isScore) {
       // Colour comes from the score band, never from the icon colour.
       t.style.removeProperty("--tsf-icon-color");
       label = this._renderScoreTrigger();
     } else {
-      t.innerHTML = icons.render({
-        mode: o.iconMode,
-        builtin: o.iconBuiltin,
-        leonardo: o.iconLeonardo
-      });
+      t.innerHTML = this._iconHtml();
       t.classList.remove("tsf-trigger--loading");
       setBand(t, null);
       this._triggerScore = null;
@@ -183,6 +273,15 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
     t.setAttribute("aria-label", label);
     t.title = label;
+  };
+
+  Component.prototype._iconHtml = function () {
+    var o = this.opts;
+    return icons.render({
+      mode: o.iconMode,
+      builtin: o.iconBuiltin,
+      leonardo: o.iconLeonardo
+    });
   };
 
   /**
@@ -240,6 +339,55 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     return label;
   };
 
+  /**
+   * The "no access" look: the configured icon faded with a padlock badge, or
+   * in score mode an empty ring with a padlock where the number would be.
+   */
+  Component.prototype._renderLockedTrigger = function (status, isScore, ghost) {
+    var t = this.trigger;
+    t.style.removeProperty("--tsf-icon-color");
+    t.classList.remove("tsf-trigger--loading");
+    setBand(t, "na");
+    this._triggerScore = null;
+    var lock = icons.glyph("lock");
+    t.innerHTML = isScore
+      ? this._ring(null, null, lock)
+      : this._iconHtml() + '<span class="tsf-lock">' + lock + "</span>";
+    var label = (this.opts.title || "Trust Scores") + " · " + ACCESS_TEXT[status].tip;
+    if (ghost) label += " (hidden from viewers without access)";
+    return label;
+  };
+
+  /** Hide-mode "still checking" state, with a safety timer that fails open. */
+  Component.prototype._setPending = function (pending) {
+    var t = this.trigger;
+    var self = this;
+    t.classList.toggle("tsf-trigger--pending", pending);
+    if (pending && !this._revealTimer) {
+      this._revealTimer = setTimeout(function () {
+        self._revealTimer = null;
+        self._revealAnyway = true;
+        self._renderTrigger();
+      }, REVEAL_AFTER_MS);
+    } else if (!pending) {
+      this._clearRevealTimer();
+      if (this._wasPending) {
+        // Fade in rather than pop when the answer arrives.
+        t.classList.remove("tsf-trigger--reveal");
+        void t.offsetWidth;
+        t.classList.add("tsf-trigger--reveal");
+      }
+    }
+    this._wasPending = pending;
+  };
+
+  Component.prototype._clearRevealTimer = function () {
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
+    }
+  };
+
   // ---------------------------------------------------------------------------
   // Open / close
   // ---------------------------------------------------------------------------
@@ -263,16 +411,20 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     document.body.appendChild(this.panel);
     this._positionPanel();
 
-    // Animate in on the next frame.
+    // Animate in on the next frame. Both deferred steps check the panel is
+    // still the one they were scheduled for: a quick double-click or a Qlik
+    // re-render can close it before they run.
     var self = this;
+    var panel = this.panel;
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
-        self.panel.classList.add("is-open");
+        if (self.panel === panel) panel.classList.add("is-open");
       });
     });
 
     // Late-bound global listeners.
     setTimeout(function () {
+      if (!self.state.open || self.panel !== panel) return;
       document.addEventListener("mousedown", self._onDocDown, true);
       document.addEventListener("touchstart", self._onDocDown, true);
       window.addEventListener("resize", self._onReposition);
@@ -280,7 +432,8 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }, 0);
 
     this._renderData();
-    if (!this.state.data && !this.state.loading) {
+    // A locked button explains itself; it doesn't retry. Refresh does that.
+    if (!this._isBlocked() && !this.state.data && !this.state.loading) {
       this._load();
     }
   };
@@ -296,6 +449,12 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     document.removeEventListener("touchstart", this._onDocDown, true);
     window.removeEventListener("resize", this._onReposition);
     window.removeEventListener("scroll", this._onReposition, true);
+
+    // In hide mode a button that turned out to be blocked while its panel was
+    // open disappears only now, once the viewer has read why.
+    if (!immediate && this._isBlocked()) {
+      this._renderTrigger();
+    }
 
     var panel = this.panel;
     this.panel = null;
@@ -413,6 +572,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     var req = ++this._req;
     this.state.loading = true;
     this.state.error = null;
+    this.state.denied = false;
     this._render();
 
     dataAdapter
@@ -431,6 +591,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         self.state.loading = false;
         self.state.data = result.rows;
         self.state.aggregate = result.aggregate;
+        self.state.visible = typeof result.visible === "number" ? result.visible : null;
         self.state.loadedKey = key;
         self._render();
       })
@@ -438,6 +599,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         if (req !== self._req) return;
         self.state.loading = false;
         self.state.error = (err && err.message) || "Failed to load trust scores.";
+        self.state.denied = dataAdapter.isDenied(err);
         self.state.data = null;
         self.state.aggregate = null;
         self._render();
@@ -460,6 +622,15 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
     if (s.loading) {
       this.kpis.innerHTML = this._skeleton();
+      this._positionPanel();
+      return;
+    }
+    if (this._isBlocked()) {
+      this.kpis.innerHTML = this._accessMessage(this._accessStatus());
+      if (s.selectedId) {
+        s.selectedId = null;
+        this._renderDetail(false);
+      }
       this._positionPanel();
       return;
     }
@@ -504,6 +675,19 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     }
     this._renderDetail(false);
     this._positionPanel();
+  };
+
+  /** Panel message explaining why the button is locked, and who to ask. */
+  Component.prototype._accessMessage = function (status) {
+    var txt = ACCESS_TEXT[status];
+    return (
+      '<div class="tsf-msg tsf-msg--locked">' +
+      '<div class="tsf-msg-glyph">' + icons.glyph("lock") + "</div>" +
+      '<div class="tsf-msg-title">' + escapeHtml(txt.title) + "</div>" +
+      '<div class="tsf-msg-sub">' + escapeHtml(txt.sub) + "</div>" +
+      '<div class="tsf-msg-hint">' + escapeHtml(txt.hint) + "</div>" +
+      "</div>"
+    );
   };
 
   Component.prototype._kpiCard = function (row, index) {
@@ -554,10 +738,12 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
   /**
    * Score ring markup. `text` overrides the centre label (defaults to the
-   * rounded score, or an en dash when there is no score).
+   * rounded score, or an en dash when there is no score). `centreHtml`, when
+   * given, is trusted markup (e.g. the padlock glyph) used instead of text.
    */
-  Component.prototype._ring = function (score, text) {
+  Component.prototype._ring = function (score, text, centreHtml) {
     if (text == null) text = score == null ? "–" : String(Math.round(score));
+    var centre = centreHtml != null ? centreHtml : escapeHtml(text);
     return (
       '<div class="tsf-ring">' +
       '<svg viewBox="0 0 64 64" class="tsf-ring-svg">' +
@@ -566,7 +752,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       'stroke-dasharray="' + ringDash(score) + '" ' +
       'transform="rotate(-90 32 32)"></circle>' +
       "</svg>" +
-      '<div class="tsf-ring-val">' + escapeHtml(text) + "</div>" +
+      '<div class="tsf-ring-val">' + centre + "</div>" +
       "</div>"
     );
   };

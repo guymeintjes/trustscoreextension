@@ -47,7 +47,8 @@
     <h1>Trust Score Flyout</h1>
     <p class="sub">Live preview running the real extension component in <b>demo-data</b> mode. Click the button.
       Demo data includes transformation warnings (⚠ / ●) and dataset links. Switch the button to
-      <b>aggregate score</b> to see the average Trust Score drawn on the button itself.</p>
+      <b>aggregate score</b> to see the average Trust Score drawn on the button itself. Set
+      <b>Viewer</b> to <i>no access</i> to see what someone without permission gets.</p>
 
     <div class="toolbar">
       <strong style="font-size:14px;">Dashboard header</strong>
@@ -95,6 +96,20 @@
           <option value="name">name</option>
         </select>
       </label>
+      <label>If no access
+        <select id="noAccess">
+          <option value="lock">lock</option>
+          <option value="hide">hide</option>
+          <option value="show">always show</option>
+        </select>
+      </label>
+      <label>Viewer
+        <select id="viewer">
+          <option value="ok">has access</option>
+          <option value="denied">no access</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="edit" /> Edit mode</label>
     </div>
 
     <div class="note">
@@ -124,10 +139,13 @@
           demo: true,
           scope: "appLineage",
           sort: $("sort").value,
-          maxItems: 20
+          maxItems: 20,
+          noAccess: $("noAccess").value,
+          simulateNoAccess: $("viewer").value === "denied",
+          editMode: $("edit").checked
         });
       }
-      ["mode", "icon", "style", "size", "sort"].forEach(function (id) {
+      ["mode", "icon", "style", "size", "sort", "noAccess", "viewer", "edit"].forEach(function (id) {
         $(id).addEventListener("change", render);
       });
       render();

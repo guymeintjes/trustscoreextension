@@ -229,6 +229,74 @@ define(["./lib/icons"], function (icons) {
     }
   };
 
+  // ---- Access -------------------------------------------------------------
+  function noAccessMode(d) {
+    var m = d && d.props && d.props.noAccess;
+    return m === "hide" || m === "show" ? m : "lock";
+  }
+  function isDemo(d) {
+    return !!(d && d.props && d.props.demo);
+  }
+
+  var accessSection = {
+    type: "items",
+    label: "Access",
+    items: {
+      noAccess: {
+        ref: "props.noAccess",
+        type: "string",
+        component: "dropdown",
+        label: "If the viewer can't see Trust Scores",
+        options: [
+          { value: "lock", label: "Show a locked button" },
+          { value: "hide", label: "Hide the button" },
+          { value: "show", label: "Always show (no check)" }
+        ],
+        defaultValue: "lock"
+      },
+      lockHint: {
+        component: "text",
+        text:
+          "When the sheet opens, the scores load as the person viewing it. If Qlik " +
+          "Cloud refuses, or they can't see any datasets, the button shows a padlock " +
+          "and clicking it explains what's missing.",
+        show: function (d) { return noAccessMode(d) === "lock"; }
+      },
+      hideHint: {
+        component: "text",
+        text:
+          "Same check, but viewers without access don't see the button at all. In " +
+          "edit mode it stays visible, faded, so you can still select it. Turn off " +
+          "Show titles under Appearance so nothing of the object shows.",
+        show: function (d) { return noAccessMode(d) === "hide"; }
+      },
+      showHint: {
+        component: "text",
+        text:
+          "No check is made and scores load on first click. Viewers without access " +
+          "see an error message when they open the flyout.",
+        show: function (d) { return noAccessMode(d) === "show"; }
+      },
+      simulateNoAccess: {
+        ref: "props.simulateNoAccess",
+        type: "boolean",
+        component: "switch",
+        label: "Preview as a viewer without access",
+        options: [
+          { value: true, label: "On" },
+          { value: false, label: "Off" }
+        ],
+        defaultValue: false,
+        show: function (d) { return isDemo(d) && noAccessMode(d) !== "show"; }
+      },
+      simulateHint: {
+        component: "text",
+        text: "Turn on Demo data to preview what a viewer without access sees.",
+        show: function (d) { return !isDemo(d) && noAccessMode(d) !== "show"; }
+      }
+    }
+  };
+
   // ---- About --------------------------------------------------------------
   var aboutSection = {
     type: "items",
@@ -239,7 +307,8 @@ define(["./lib/icons"], function (icons) {
         text:
           "Trust Score Flyout reads Qlik Cloud Data Governance Trust Scores. " +
           "The signed-in user needs dataset:read and dataquality:read permissions. " +
-          "Datasets without a computed Trust Score are hidden automatically."
+          "Datasets without a computed Trust Score are hidden automatically. " +
+          "Viewers without access get a locked or hidden button, set under Access."
       }
     }
   };
@@ -250,6 +319,7 @@ define(["./lib/icons"], function (icons) {
     items: {
       icon: buttonSection,
       data: dataSection,
+      access: accessSection,
       settings: { uses: "settings" },
       about: aboutSection
     }

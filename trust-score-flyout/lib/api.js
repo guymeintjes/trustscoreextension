@@ -199,7 +199,15 @@ define([], function () {
             credentials: "same-origin",
             headers: headers,
             body: JSON.stringify({ datasetIds: batch })
-          }).then(jsonOrThrow);
+          })
+            .then(jsonOrThrow)
+            .catch(function (err) {
+              // Without a CSRF token a 403 may be the gateway rejecting the
+              // POST rather than a permission decision. Flag it so the access
+              // check doesn't mistake it for "no permission".
+              if (!token && err && err.status === 403) err.csrfSuspect = true;
+              throw err;
+            });
         })
       ).then(function (responses) {
         var map = {};

@@ -12,6 +12,8 @@ script reshapes the source enough that the score might not tell the whole story.
 
 If you'd rather not click at all, the button can show the **aggregate Trust Score**
 across all the datasets, drawn as the same colour-banded ring the flyout uses.
+And people who open the sheet without permission to see Trust Scores get a locked
+button, or no button at all, instead of an error.
 
 How it works, which APIs it calls and how to configure it all live in the
 [extension's own README](trust-score-flyout/README.md).
@@ -31,4 +33,6 @@ It runs the real component on sample data, no tenant needed.
 
 - A Qlik Cloud tenant with Trust Scores switched on (part of Data Governance).
 - Whoever views the sheet needs permission to read datasets and data quality:
-  `dataset:read` and `dataquality:read`.
+  `dataset:read` and `dataquality:read`. They also need access to the space the
+  datasets live in. Viewers without it get a locked button by default, or a hidden
+  one if you prefer. You can change that under **Access** in the properties panel.

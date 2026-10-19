@@ -7,6 +7,9 @@
  * Score, as a horizontal row of KPI rings. Clicking a KPI expands a drill-down
  * showing the axis breakdown, weights and dataset description. Clicking outside
  * collapses the panel back to the icon.
+ *
+ * Unless switched off, the scores load when the sheet opens, as the viewer, so
+ * a viewer without access gets a locked or hidden button instead of an error.
  */
 define([
   "qlik",
@@ -24,7 +27,7 @@ define([
       .filter(Boolean);
   }
 
-  function resolveOptions(props, appId) {
+  function resolveOptions(props, appId, editMode) {
     props = props || {};
     return {
       // appearance
@@ -43,8 +46,35 @@ define([
       datasetIds: parseIds(props.datasetIdsRaw),
       transform: props.transform !== false,
       sort: props.sort || "scoreDesc",
-      maxItems: typeof props.maxItems === "number" ? props.maxItems : 20
+      maxItems: typeof props.maxItems === "number" ? props.maxItems : 20,
+      // access
+      noAccess:
+        props.noAccess === "hide" || props.noAccess === "show" ? props.noAccess : "lock",
+      simulateNoAccess: !!props.simulateNoAccess,
+      editMode: !!editMode
     };
+  }
+
+  /**
+   * True while the sheet is in edit mode. Tries each route Qlik has offered,
+   * and falls back to analysis mode if none answers.
+   */
+  function isEditMode(ext) {
+    try {
+      if (qlik.navigation && typeof qlik.navigation.getMode === "function") {
+        return qlik.navigation.getMode() === "edit";
+      }
+    } catch (e) { /* try the next route */ }
+    try {
+      if (ext && typeof ext.inEditState === "function") {
+        return !!ext.inEditState();
+      }
+    } catch (e) { /* try the next route */ }
+    try {
+      return !!(ext && ext.options && ext.options.interactionState === 2);
+    } catch (e) {
+      return false;
+    }
   }
 
   function currentAppId(context) {
@@ -74,7 +104,9 @@ define([
         datasetIdsRaw: "",
         transform: true,
         sort: "scoreDesc",
-        maxItems: 20
+        maxItems: 20,
+        noAccess: "lock",
+        simulateNoAccess: false
       }
     },
 
@@ -93,7 +125,7 @@ define([
         this._tsf.destroy();
         this._tsf = new Component(el);
       }
-      var opts = resolveOptions(layout.props, currentAppId(this));
+      var opts = resolveOptions(layout.props, currentAppId(this), isEditMode(this));
       this._tsf.update(opts);
       return qlik.Promise.resolve();
     },

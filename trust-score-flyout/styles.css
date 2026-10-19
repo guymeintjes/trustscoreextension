@@ -633,3 +633,65 @@ body.qv-theme-dark .tsf-panel,
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ---- Access check ------------------------------------------------------ */
+.tsf-trigger { position: relative; }
+
+/* Hide mode: invisible while checking, gone once access is ruled out. */
+.tsf-trigger--pending { visibility: hidden; }
+.tsf-host--hidden .tsf-trigger { display: none; }
+.tsf-trigger--reveal { animation: tsf-reveal 0.28s var(--tsf-ease); }
+@keyframes tsf-reveal {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Locked: faded icon (or empty ring) plus a padlock. */
+.tsf-trigger--locked,
+.tsf-trigger--locked.tsf-trigger--bare:hover { color: var(--tsf-fg-muted); }
+.tsf-trigger--locked > .tsf-svg,
+.tsf-trigger--locked > .lui-icon { opacity: 0.45; }
+.tsf-trigger--locked .tsf-ring-svg { opacity: 0.7; }
+.tsf-lock {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: max(14px, calc(var(--tsf-icon-size) * 0.55));
+  height: max(14px, calc(var(--tsf-icon-size) * 0.55));
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tsf-bg);
+  color: var(--tsf-fg);
+  box-shadow: 0 0 0 1px var(--tsf-border-strong), 0 2px 5px -2px rgba(16, 32, 52, 0.35);
+}
+.tsf-trigger .tsf-lock .tsf-svg { width: 62%; height: 62%; stroke-width: 2.4; }
+.tsf-trigger .tsf-ring-val .tsf-svg { width: 42%; height: 42%; color: var(--tsf-fg-muted); }
+
+/* Hide mode in edit mode: still selectable, clearly marked as hidden. */
+.tsf-trigger--ghost {
+  opacity: 0.5;
+  outline: 1.5px dashed var(--tsf-border-strong);
+  outline-offset: 2px;
+}
+
+/* Panel message for a locked button. */
+.tsf-msg-glyph {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tsf-bg-elev);
+  border: 1px solid var(--tsf-border);
+  color: var(--tsf-fg-muted);
+}
+.tsf-msg-glyph svg { width: 18px; height: 18px; }
+.tsf-msg--locked { max-width: 340px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tsf-trigger--reveal { animation-duration: 0.01ms !important; }
+}
