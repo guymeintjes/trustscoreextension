@@ -4,8 +4,9 @@
  * All settings are stored under layout.props.*
  *
  * Items use `show` callbacks for conditional visibility: the property panel
- * re-evaluates them whenever a value changes, so picking a different "Icon
- * source" hides the fields that no longer apply.
+ * re-evaluates them whenever a value changes, so picking a different "Button
+ * shows" option hides the fields that no longer apply. (The setting is still
+ * stored as props.iconMode, so existing objects keep their choice.)
  */
 define(["./lib/icons"], function (icons) {
   "use strict";
@@ -26,8 +27,14 @@ define(["./lib/icons"], function (icons) {
   function isScore(data) {
     return iconMode(data) === "score";
   }
+  function isSummary(data) {
+    return iconMode(data) === "summary";
+  }
   function isIcon(data) {
-    return !isScore(data);
+    return isBuiltin(data) || isLeonardo(data);
+  }
+  function insightsOn(data) {
+    return !(data && data.props && data.props.transform === false);
   }
 
   // ---- Appearance / Button ------------------------------------------------
@@ -45,11 +52,12 @@ define(["./lib/icons"], function (icons) {
         ref: "props.iconMode",
         type: "string",
         component: "dropdown",
-        label: "Icon source",
+        label: "Button shows",
         options: [
-          { value: "builtin", label: "Built-in (SVG)" },
-          { value: "leonardo", label: "Leonardo UI (lui-icon)" },
-          { value: "score", label: "Aggregate Trust Score" }
+          { value: "builtin", label: "Icon: built-in (SVG)" },
+          { value: "leonardo", label: "Icon: Leonardo UI (lui-icon)" },
+          { value: "score", label: "Trust Score ring" },
+          { value: "summary", label: "Trust Score summary card" }
         ],
         defaultValue: "builtin"
       },
@@ -85,6 +93,46 @@ define(["./lib/icons"], function (icons) {
           "more keeps the number easy to read.",
         show: isScore
       },
+      summaryHint: {
+        component: "text",
+        text:
+          "A wider card that fills the object: the average Trust Score ring with " +
+          "the title, how many datasets it covers and how many need attention " +
+          "(below 60), the change since the previous scores, and the mix of " +
+          "scores. It covers every scored dataset in scope. Resize the object to " +
+          "fit: details drop away as it gets smaller, down to just the ring.",
+        show: isSummary
+      },
+      summaryCounts: {
+        ref: "props.summaryCounts",
+        type: "boolean",
+        label: "Show dataset count and attention",
+        defaultValue: true,
+        show: isSummary
+      },
+      summaryTrend: {
+        ref: "props.summaryTrend",
+        type: "boolean",
+        label: "Show change since previous scores",
+        defaultValue: true,
+        show: isSummary
+      },
+      summaryMix: {
+        ref: "props.summaryMix",
+        type: "boolean",
+        label: "Show score mix bar",
+        defaultValue: true,
+        show: isSummary
+      },
+      summaryScript: {
+        ref: "props.summaryScript",
+        type: "boolean",
+        label: "Show script-change badge",
+        defaultValue: true,
+        show: function (d) {
+          return isSummary(d) && insightsOn(d);
+        }
+      },
       triggerStyle: {
         ref: "props.triggerStyle",
         type: "string",
@@ -104,7 +152,11 @@ define(["./lib/icons"], function (icons) {
         min: 16,
         max: 64,
         step: 2,
-        defaultValue: 28
+        defaultValue: 28,
+        // The card sizes itself to the object.
+        show: function (d) {
+          return !isSummary(d);
+        }
       },
       iconColor: {
         ref: "props.iconColor",
@@ -203,9 +255,11 @@ define(["./lib/icons"], function (icons) {
       maxItemsHint: {
         component: "text",
         text:
-          "Caps the cards in the flyout only. The aggregate score on the button " +
-          "always averages every scored dataset in scope.",
-        show: isScore
+          "Caps the cards in the flyout only. The score on the button always " +
+          "covers every scored dataset in scope.",
+        show: function (d) {
+          return isScore(d) || isSummary(d);
+        }
       },
       transform: {
         ref: "props.transform",

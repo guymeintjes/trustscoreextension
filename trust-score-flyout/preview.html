@@ -50,8 +50,10 @@
     <h1>Trust Score Flyout</h1>
     <p class="sub">Live preview running the real extension component in <b>demo-data</b> mode. Click the button.
       Demo data includes transformation warnings (⚠ / ●) and dataset links. Switch the button to
-      <b>aggregate score</b> to see the average Trust Score drawn on the button itself. Set
-      <b>Viewer</b> to <i>no access</i> to see what someone without permission gets.</p>
+      <b>score ring</b> to see the average Trust Score drawn on the button itself, or to
+      <b>summary card</b> for the wider card with counts, the recent change and the mix of scores
+      (try the card sizes to see detail drop away). Set <b>Viewer</b> to <i>no access</i> to see
+      what someone without permission gets.</p>
 
     <div class="toolbar">
       <strong style="font-size:14px;">Dashboard header</strong>
@@ -63,7 +65,15 @@
       <label>Button
         <select id="mode">
           <option value="builtin">icon</option>
-          <option value="score">aggregate score</option>
+          <option value="score">score ring</option>
+          <option value="summary">summary card</option>
+        </select>
+      </label>
+      <label id="cardLabel">Card size
+        <select id="card">
+          <option value="220x56">small (220×56)</option>
+          <option value="300x84" selected>medium (300×84)</option>
+          <option value="420x120">large (420×120)</option>
         </select>
       </label>
       <label id="iconLabel">Icon
@@ -85,7 +95,7 @@
           <option value="chip">chip</option>
         </select>
       </label>
-      <label>Size
+      <label id="sizeLabel">Size
         <select id="size">
           <option value="28">28 px</option>
           <option value="40">40 px</option>
@@ -133,7 +143,14 @@
 
       function render() {
         var mode = $("mode").value;
-        $("iconLabel").classList.toggle("is-hidden", mode === "score");
+        var card = mode === "summary";
+        $("iconLabel").classList.toggle("is-hidden", mode !== "builtin");
+        $("sizeLabel").classList.toggle("is-hidden", card);
+        $("cardLabel").classList.toggle("is-hidden", !card);
+        // The card fills its object, so give the toolbar cell a real size.
+        var wh = $("card").value.split("x");
+        host.style.width = card ? wh[0] + "px" : "";
+        host.style.height = card ? wh[1] + "px" : "";
         comp.update({
           title: "Trust Scores",
           iconMode: mode,
@@ -149,7 +166,7 @@
           editMode: $("edit").checked
         });
       }
-      ["mode", "icon", "style", "size", "sort", "noAccess", "viewer", "edit"].forEach(function (id) {
+      ["mode", "card", "icon", "style", "size", "sort", "noAccess", "viewer", "edit"].forEach(function (id) {
         $(id).addEventListener("change", render);
       });
       $("resetHint").addEventListener("click", function () { Component.resetHint(); });

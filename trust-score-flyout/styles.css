@@ -518,6 +518,7 @@ body.qv-theme-dark .tsf-panel,
 
 /* ---- Transformation index ------------------------------------------- */
 .tsf-tband--info     { --tsf-t: var(--tsf-accent); }
+.tsf-tband--unknown  { --tsf-t: var(--tsf-na); }
 .tsf-tband--alert    { --tsf-t: var(--tsf-low); }
 .tsf-tband--critical { --tsf-t: var(--tsf-poor); }
 
@@ -597,6 +598,26 @@ body.qv-theme-dark .tsf-panel,
   border-left: 2px solid var(--tsf-t);
 }
 .tsf-reason-label { font-size: 12px; font-weight: 700; color: var(--tsf-fg); }
+
+/* Couldn't check: the same callout, quieter and grey. */
+.tsf-callout.tsf-tband--unknown {
+  background: color-mix(in srgb, var(--tsf-na) 8%, var(--tsf-bg));
+  border-color: color-mix(in srgb, var(--tsf-na) 30%, transparent);
+}
+.tsf-tband--unknown .tsf-callout-title {
+  font-weight: 600;
+  color: var(--tsf-fg-muted);
+}
+.tsf-tband--unknown .tsf-callout-note { margin-bottom: 0; }
+/* Findings from the lineage statements alone: say what couldn't be seen. */
+.tsf-callout-partial {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--tsf-t) 25%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--tsf-fg-muted);
+}
 .tsf-reason-detail { font-size: 11.5px; line-height: 1.45; color: var(--tsf-fg-muted); }
 
 /* Detail footer: open link + updated time */
@@ -674,6 +695,213 @@ body.qv-theme-dark .tsf-panel,
   .tsf-trigger--loading .tsf-ring,
   .tsf-trigger--score .tsf-ring-svg {
     animation-duration: 0.01ms !important;
+  }
+}
+
+/* ---- Summary card trigger -------------------------------------------- */
+/* A wider button that fills the object like a KPI tile: the aggregate ring,
+   the title with the change since the previous scores, the dataset count
+   and how many need attention, and the mix of scores as a bar. The host is a
+   size container, so detail drops away as the object gets smaller: first the
+   bar, then the second line, then the chevron, until only the ring is left. */
+.tsf-host--summary {
+  container: tsf-sum / size;
+}
+.tsf-trigger--summary {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  overflow: hidden;
+  color: var(--tsf-fg);
+  font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.25;
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+}
+/* A tile shouldn't jump or scale like a small icon does. */
+.tsf-trigger--summary.tsf-trigger--bare:hover {
+  transform: none;
+  color: var(--tsf-fg);
+  background: color-mix(in srgb, var(--tsf-fg) 5%, transparent);
+}
+.tsf-trigger--summary.is-active {
+  transform: none;
+  color: var(--tsf-fg);
+}
+.tsf-trigger--summary.tsf-trigger--chip.is-active {
+  border-color: color-mix(in srgb, var(--tsf-accent) 55%, transparent);
+}
+.tsf-trigger--summary.is-active .tsf-svg { animation: none; }
+.tsf-trigger--summary:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--tsf-accent) 60%, transparent);
+}
+
+/* The ring follows the object's height (fallback sizes first). */
+.tsf-sum-ring {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  width: clamp(26px, calc(100cqh - 26px), 76px);
+  height: clamp(26px, calc(100cqh - 26px), 76px);
+}
+.tsf-sum-ring .tsf-ring,
+.tsf-sum-ring .tsf-ring-svg {
+  width: 100%;
+  height: 100%;
+}
+.tsf-trigger--summary .tsf-ring-track,
+.tsf-trigger--summary .tsf-ring-arc {
+  stroke-width: 7;
+}
+.tsf-sum-ring .tsf-ring-val {
+  font-size: 17px;
+  font-size: clamp(10px, calc((100cqh - 26px) * 0.36), 27px);
+  letter-spacing: -0.03em;
+}
+/* The script-change badge scales with the ring so it never covers the number. */
+.tsf-sum-ring .tsf-tbadge {
+  top: -3px;
+  left: -3px;
+  width: 16px;
+  height: 16px;
+  width: clamp(11px, calc((100cqh - 26px) * 0.27), 18px);
+  height: clamp(11px, calc((100cqh - 26px) * 0.27), 18px);
+}
+.tsf-sum-ring .tsf-tbadge .tsf-svg {
+  width: 68%;
+  height: 68%;
+}
+
+.tsf-sum-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.tsf-sum-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tsf-sum-title {
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tsf-sum-delta {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  padding: 0 5px;
+  border-radius: 6px;
+}
+.tsf-sum-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--tsf-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tsf-sum-warn {
+  color: var(--tsf-band);
+  font-weight: 600;
+}
+.tsf-sum-sk {
+  display: block;
+  width: 70%;
+  height: 10px;
+}
+/* Same voice as the field health bars: one segment per score band. */
+.tsf-sum-mix {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  max-width: 360px;
+  margin-top: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+  transform-origin: left center;
+  animation: tsf-sum-grow 0.7s var(--tsf-ease) both;
+}
+.tsf-sum-seg {
+  flex: 1 1 0;
+  min-width: 4px;
+  background: var(--tsf-band);
+}
+@keyframes tsf-sum-grow {
+  from { transform: scaleX(0); }
+  to { transform: none; }
+}
+.tsf-sum-go {
+  flex: none;
+  display: inline-flex;
+  color: var(--tsf-fg-muted);
+  transition: transform 0.2s var(--tsf-ease), color 0.2s ease;
+}
+.tsf-sum-go .tsf-svg {
+  width: 16px;
+  height: 16px;
+}
+.tsf-trigger--summary:hover .tsf-sum-go,
+.tsf-trigger--summary.is-active .tsf-sum-go {
+  color: var(--tsf-accent);
+  transform: translateX(2px);
+}
+.tsf-trigger--locked .tsf-sum-go { visibility: hidden; }
+
+@container tsf-sum (max-height: 79px) {
+  .tsf-sum-mix { display: none; }
+}
+@container tsf-sum (max-height: 55px) {
+  .tsf-trigger--summary { padding: 4px 10px; gap: 10px; }
+  .tsf-sum-meta { display: none; }
+  /* One line: the ring takes the height the tighter padding frees up. */
+  .tsf-sum-ring {
+    width: clamp(22px, calc(100cqh - 12px), 44px);
+    height: clamp(22px, calc(100cqh - 12px), 44px);
+  }
+  .tsf-sum-ring .tsf-ring-val { font-size: clamp(9px, calc((100cqh - 12px) * 0.36), 16px); }
+  .tsf-sum-ring .tsf-tbadge {
+    top: -2px;
+    left: -2px;
+    width: clamp(10px, calc((100cqh - 12px) * 0.3), 14px);
+    height: clamp(10px, calc((100cqh - 12px) * 0.3), 14px);
+  }
+}
+@container tsf-sum (max-width: 239px) {
+  .tsf-sum-go { display: none; }
+}
+@container tsf-sum (max-width: 159px) {
+  .tsf-trigger--summary { justify-content: center; padding: 6px; }
+  .tsf-sum-text { display: none; }
+}
+@container tsf-sum (min-height: 112px) and (min-width: 320px) {
+  .tsf-trigger--summary { gap: 16px; padding: 14px 18px; }
+  .tsf-sum-text { gap: 6px; }
+  .tsf-sum-title { font-size: 15.5px; }
+  .tsf-sum-meta { font-size: 13px; }
+  .tsf-sum-mix { height: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tsf-sum-mix,
+  .tsf-sum-go {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

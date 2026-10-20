@@ -63,6 +63,12 @@ define([], function () {
         }
       ]
     },
+    "mock-finance": {
+      band: "unknown",
+      attributed: false,
+      reasons: [],
+      reason: "notFound"
+    },
     "mock-web": {
       band: "info",
       attributed: true,
@@ -162,7 +168,7 @@ define([], function () {
       description:
         "Posted general-ledger journal entries reconciled to the trial balance.",
       score: 96,
-      previousScore: 95,
+      previousScore: 91,
       updatedAt: "2026-08-13T01:30:00Z",
       axes: [
         axis("COMPLETENESS", 99, 25),

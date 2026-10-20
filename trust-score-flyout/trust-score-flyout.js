@@ -1,8 +1,9 @@
 /**
  * Trust Score Flyout — Qlik Cloud (client-managed) visualization extension.
  *
- * Renders a customisable button (an icon, or a ring showing the aggregate
- * Trust Score) inside the object. Clicking it reveals an
+ * Renders a customisable button (an icon, a ring showing the aggregate Trust
+ * Score, or a summary card around that ring) inside the object. Clicking it
+ * reveals an
  * animated flyout listing the datasets in scope that have a Qlik Cloud Trust
  * Score, as a horizontal row of KPI rings. Clicking a KPI expands a drill-down
  * showing the axis breakdown, weights and dataset description. Clicking outside
@@ -38,6 +39,11 @@ define([
       triggerStyle: props.triggerStyle || "bare",
       iconSize: props.iconSize || 28,
       iconColor: props.iconColor || "",
+      // summary card details (all on unless switched off)
+      summaryCounts: props.summaryCounts !== false,
+      summaryTrend: props.summaryTrend !== false,
+      summaryMix: props.summaryMix !== false,
+      summaryScript: props.summaryScript !== false,
       // data
       demo: !!props.demo,
       scope: props.scope || "appLineage",
@@ -98,6 +104,10 @@ define([
         triggerStyle: "bare",
         iconSize: 28,
         iconColor: "",
+        summaryCounts: true,
+        summaryTrend: true,
+        summaryMix: true,
+        summaryScript: true,
         demo: false,
         scope: "appLineage",
         spaceId: "",

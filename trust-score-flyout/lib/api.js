@@ -309,7 +309,9 @@ define([], function () {
           });
       })
       .catch(function () {
-        return "";
+        // Couldn't read it (often a viewer without edit rights). Null, not "",
+        // so insights can say they couldn't check rather than found nothing.
+        return null;
       });
   }
 

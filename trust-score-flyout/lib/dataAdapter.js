@@ -24,7 +24,9 @@
  *   datasetId, name, technicalName, description, openUrl,
  *   score, previousScore, updatedAt,
  *   axes: [{ id, label, score, weight, enabled, metrics:[...] }],
- *   transformation: { band, score, attributed, reasons:[...] } | null
+ *   transformation: { band, score, attributed, reasons:[...], partial? } | null
+ *     band "unknown" (with reason "script" | "analysis" | "notFound") when the
+ *     script check couldn't give an answer for this dataset
  * }
  */
 define(["./api", "./mockData", "./lineage", "./transform"], function (
@@ -170,7 +172,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     });
   }
 
-  /** The app's load script and data-lineage entries (both best-effort). */
+  /**
+   * The app's load script and data-lineage entries (both best-effort).
+   * scriptRead is false when the script couldn't be read at all.
+   */
   function appContext(appId, fresh) {
     return memo("ctx:" + appId, fresh, function () {
       return Promise.all([
@@ -178,10 +183,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
           return [];
         }),
         api.getAppScript(appId).catch(function () {
-          return "";
+          return null;
         })
       ]).then(function (r) {
-        return { sources: r[0] || [], script: r[1] || "" };
+        return { sources: r[0] || [], script: r[1] || "", scriptRead: r[1] != null };
       });
     });
   }
@@ -211,8 +216,12 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
   // Rows
   // ---------------------------------------------------------------------------
 
-  /** Merge one catalog item + its trust score result into a UI row. */
-  function shapeRow(item, ts, model) {
+  /**
+   * Merge one catalog item + its trust score result into a UI row. `insight`
+   * is the script check's outcome (null when insights are off); `inApp` says
+   * the dataset is known to be loaded by this app.
+   */
+  function shapeRow(item, ts, insight, inApp) {
     var axes = (ts.axes || [])
       // Only enabled axes with a real score. Disabled axes (weight 0) can still
       // carry a score in the API response, so filter on `enabled`, not score.
@@ -258,11 +267,63 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       transformation: null
     };
 
-    if (model) {
-      var t = transform.verdict(model, { name: row.name, technicalName: row.technicalName });
-      row.transformation = t.attributed || t.band !== "none" ? t : null;
-    }
+    if (insight) row.transformation = transformationFor(insight, row, inApp);
     return row;
+  }
+
+  /** The script check couldn't answer for this dataset; reason says why. */
+  function unknownTransformation(reason) {
+    return { band: "unknown", score: 0, attributed: false, reasons: [], reason: reason };
+  }
+
+  /**
+   * What the script check says about one dataset, or that it couldn't tell:
+   *   script     the load script couldn't be read, so there's nothing to check
+   *              (or only how each source was first read, which can't rule
+   *              out a later join or filter)
+   *   analysis   the script couldn't be followed
+   *   notFound   a dataset this app loads isn't named anywhere in its script
+   * Null when there's nothing to say: no changes found, or a dataset in scope
+   * that this app may not load at all.
+   */
+  function transformationFor(insight, row, inApp) {
+    if (!insight.model) return unknownTransformation(insight.failed || "analysis");
+    var t;
+    try {
+      t = transform.verdict(insight.model, { name: row.name, technicalName: row.technicalName });
+    } catch (e) {
+      return unknownTransformation("analysis");
+    }
+    if (insight.partial) {
+      // Only the reload's own lineage statements to go on: a finding still
+      // stands, but "no changes" can't be claimed.
+      if (t.band === "none") return unknownTransformation("script");
+      t.partial = true;
+      return t;
+    }
+    if (!t.attributed && t.band === "none") return inApp ? unknownTransformation("notFound") : null;
+    return t;
+  }
+
+  var insightNoted = {};
+
+  /** One console line per app when the script check couldn't run. */
+  function noteInsight(appId, insight) {
+    var why = insight && !insight.model ? insight.failed : insight && insight.partial ? "partial" : null;
+    if (!why || insightNoted[appId + "|" + why]) return;
+    insightNoted[appId + "|" + why] = true;
+    var text = {
+      script: "the load script couldn't be read",
+      analysis: "the load script couldn't be followed",
+      partial: "the load script couldn't be read; checking how each source was read only"
+    }[why];
+    try {
+      if (typeof console !== "undefined" && console.info) {
+        console.info("[Trust Score Flyout] app " + appId + ": transformation insights limited, " + text);
+      }
+    } catch (e) {
+      /* no console */
+    }
   }
 
   /**
@@ -303,22 +364,31 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
           if (!ids.length) {
             return { rows: [], visible: visible };
           }
-          var modelP =
-            wantInsights && (ctx.script || ctx.sources.length)
-              ? scriptModel(options.appId, ctx, fresh).catch(function () {
-                  return null;
-                })
-              : Promise.resolve(null);
-          return Promise.all([scores(ids, fresh), modelP]).then(function (r) {
+          // The script check never fails the load: when it can't run, rows say
+          // they couldn't be checked instead.
+          var insightP = !wantInsights
+            ? Promise.resolve(null)
+            : !(ctx.script || ctx.sources.length)
+              ? Promise.resolve({ model: null, failed: "script" })
+              : scriptModel(options.appId, ctx, fresh).then(
+                  function (model) {
+                    return { model: model, partial: !ctx.script };
+                  },
+                  function () {
+                    return { model: null, failed: "analysis" };
+                  }
+                );
+          return Promise.all([scores(ids, fresh), insightP]).then(function (r) {
             var scoreMap = r[0];
-            var model = r[1];
+            var insight = r[1];
+            noteInsight(options.appId, insight);
             var itemsById = {};
             selection.items.forEach(function (it) {
               if (it && it.resourceId) itemsById[it.resourceId] = it;
             });
             // Only datasets that actually have a trust score survive.
             var rows = Object.keys(scoreMap).map(function (dsId) {
-              return shapeRow(itemsById[dsId] || null, scoreMap[dsId], model);
+              return shapeRow(itemsById[dsId] || null, scoreMap[dsId], insight, !!selection.inApp);
             });
             return { rows: rows, visible: visible };
           });
@@ -563,7 +633,10 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
         function done(items, via) {
           items = dedupe(items);
           report(appId, via, items.length, qris.length);
-          return toSelection(items);
+          var sel = toSelection(items);
+          // Found through lineage or the script: the app really loads these.
+          sel.inApp = via === "lineage graph" || via === "script references";
+          return sel;
         }
 
         var exact = qris.length ? lineage.itemsForQris(scoped, qris) : [];
@@ -610,8 +683,9 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
       return r && typeof r.score === "number";
     });
 
-    // Aggregate over everything in scope, before sorting/capping.
+    // Aggregate and summary over everything in scope, before sorting/capping.
     var aggregate = aggregateOf(rows);
+    var summary = summaryOf(rows);
 
     rows.sort(function (a, b) {
       if (sort === "name") return String(a.name).localeCompare(String(b.name));
@@ -622,7 +696,7 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     if (options.maxItems && options.maxItems > 0) {
       rows = rows.slice(0, options.maxItems);
     }
-    return { rows: rows, aggregate: aggregate };
+    return { rows: rows, aggregate: aggregate, summary: summary };
   }
 
   /**
@@ -644,6 +718,51 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
     return { score: sum / scored.length, count: scored.length };
   }
 
+  /** Score bands, shared with the UI: 80+, 60–79, 40–59 and under 40. */
+  function bandOf(v) {
+    if (typeof v !== "number") return "na";
+    if (v >= 80) return "high";
+    if (v >= 60) return "mid";
+    if (v >= 40) return "low";
+    return "poor";
+  }
+
+  /**
+   * The summary card's details, over every scored dataset in scope (like the
+   * aggregate, before sorting and capping):
+   *   bands        how many datasets fall in each score band
+   *   attention    how many score below 60 (the low and poor bands)
+   *   change       the average change since each dataset's previous score,
+   *                over the changeCount datasets that have one (null if none)
+   *   script       how many this app's script changes: { alert, critical },
+   *                and how many it couldn't check: unknown
+   */
+  function summaryOf(rows) {
+    var out = {
+      count: 0,
+      bands: { high: 0, mid: 0, low: 0, poor: 0 },
+      attention: 0,
+      change: null,
+      changeCount: 0,
+      script: { alert: 0, critical: 0, unknown: 0 }
+    };
+    var moved = 0;
+    (rows || []).forEach(function (r) {
+      if (!r || typeof r.score !== "number") return;
+      out.count++;
+      out.bands[bandOf(r.score)]++;
+      if (typeof r.previousScore === "number") {
+        moved += r.score - r.previousScore;
+        out.changeCount++;
+      }
+      var t = r.transformation;
+      if (t && (t.band === "alert" || t.band === "critical" || t.band === "unknown")) out.script[t.band]++;
+    });
+    out.attention = out.bands.low + out.bands.poor;
+    if (out.changeCount) out.change = moved / out.changeCount;
+    return out;
+  }
+
   /**
    * Did Qlik Cloud refuse this request for lack of permission? A 403 caused by
    * a missing or rejected CSRF token is plumbing, not a permission decision,
@@ -658,6 +777,8 @@ define(["./api", "./mockData", "./lineage", "./transform"], function (
   return {
     load: load,
     aggregate: aggregateOf,
+    summary: summaryOf,
+    band: bandOf,
     isDenied: isDenied,
     resetCache: resetCache,
     fieldQuality: fieldQuality,

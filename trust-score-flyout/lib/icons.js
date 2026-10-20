@@ -90,6 +90,12 @@ define([], function () {
         '<path d="M8 11V8a4 4 0 0 1 8 0v3"></path>'
     ),
     pointer: svg('<path d="M5 3v15l4-4 3 6 2.2-1-3-6H17z"></path>'),
+    chevron: svg('<path d="M9 6l6 6-6 6"></path>'),
+    unknown: svg(
+      '<circle cx="12" cy="12" r="9"></circle>' +
+        '<path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.3"></path>' +
+        '<path d="M12 16.8h.01"></path>'
+    ),
     external: svg(
       '<path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path>' +
         '<path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path>'

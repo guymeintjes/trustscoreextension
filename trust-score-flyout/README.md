@@ -11,8 +11,10 @@ dataset in the catalog, and a caveat when the app's load script reshapes the sou
 enough that the score might not tell the whole story. Click anywhere else and it
 folds away again.
 
-The button itself can be an icon, or it can show the **aggregate Trust Score**
-across all the datasets, so the headline number is visible without opening anything.
+The button itself can be an icon, it can show the **aggregate Trust Score**
+across all the datasets as a ring, or it can be a wider **summary card** that also
+says how many datasets that covers, how many need attention and which way the
+scores are moving. Either way the headline is visible without opening anything.
 And if someone opens the sheet without permission to see Trust Scores, the button
 **locks or hides itself** rather than leading them to an error.
 
@@ -22,12 +24,16 @@ browser. It runs the real component on sample data, no tenant required.
 ## What it does
 
 - **A button you can make your own.** Pick a built-in SVG icon (the default is a
-  magnifying glass), a Leonardo UI font icon, or let the button show the aggregate
-  Trust Score as a ring. Bare or chip style, any size from 16 to 64 px, and an
+  magnifying glass), a Leonardo UI font icon, the aggregate Trust Score as a ring,
+  or a summary card. Bare or chip style, any size from 16 to 64 px, and an
   optional colour for icon modes.
 - **An aggregate score at a glance.** In score mode the button becomes the same
   banded ring the flyout uses, showing the plain average of every scored dataset in
   scope. More on how that number is built below.
+- **A summary card that explains itself.** A wider button that fills the object
+  like a KPI tile: the ring, the dataset count, how many need attention, the change
+  since the previous scores and the mix of scores. It drops detail gracefully as
+  the object gets smaller.
 - **Checks access first.** When the sheet opens, the extension finds out whether
   the person viewing it can actually see Trust Scores. If they can't, it shows a
   padlock or hides the button, whichever you prefer.
@@ -56,7 +62,8 @@ browser. It runs the real component on sample data, no tenant required.
   what happens to each dataset on its way in: filtered, aggregated, joined,
   combined with other data, values recalculated, used only as a lookup, or not
   kept at all. The card gets an info, warning or critical glyph, and the
-  drill-down explains why.
+  drill-down explains why. When it can't tell, it says so in grey rather than
+  staying silent.
 - **Beside the button, never on top of it.** The flyout opens below, above, right
   or left of the button, wherever it fits best, and its pointer always sits at the
   point closest to the button. It closes on click-out, follows the button as the
@@ -67,7 +74,7 @@ browser. It runs the real component on sample data, no tenant required.
 
 ## The aggregate score
 
-When you set **Icon source** to **Aggregate Trust Score**, the button draws a ring
+When you set **Button shows** to **Trust Score ring**, the button draws a ring
 in exactly the same style as the KPI rings in the flyout. A few things worth
 knowing about that number:
 
@@ -86,6 +93,39 @@ knowing about that number:
 In score mode the icon picker, Leonardo name and icon colour disappear from the
 properties panel because they no longer do anything. Style and size stay, since
 they still shape the ring.
+
+## The summary card
+
+Set **Button shows** to **Trust Score summary card** for a wider button that says
+what it is. It fills the object like a KPI tile, and from left to right shows:
+
+- **The ring.** The same average Trust Score as score mode, with the
+  script-change badge on its corner when the app's load script changes any of the
+  datasets (the same glyph the tiles use).
+- **The title.** It's the panel title, with a small **▲ or ▼ chip** showing how
+  far the average has moved since each dataset's previous score. No chip means
+  no change.
+- **"Average of 9 datasets · 2 need attention".** A dataset needs attention when
+  it scores below 60. The warning takes the colour of the worst band present.
+- **The score mix.** A bar with one segment per band, sized by how many datasets
+  fall in it. Hover over it for the breakdown.
+- **A chevron**, so it reads as something to click.
+
+Hover anywhere else on the card for the whole picture in one sentence, including
+how many datasets in scope aren't scored yet. Like the ring, every number covers
+every scored dataset in scope, not just the tiles the flyout shows.
+
+**Size it with the object.** The card drops detail as the object gets smaller:
+first the mix bar (under about 80 px tall), then the second line (under about
+56 px), then the chevron (under about 240 px wide), until only the ring is left
+(under about 160 px wide). On a big tile the ring and text grow a little.
+
+Each detail has its own switch in the properties panel. The size slider and icon
+colour are hidden for the card, because it sizes itself and takes its colours
+from the score bands. Both styles work: chip gives it a card background, bare
+lets it sit on the object's own. While loading it shows the pulsing ring and a
+shimmer line. If the fetch fails it says so, and a viewer without access sees
+the padlock ring with the reason beside it.
 
 ## Field health
 
@@ -302,9 +342,25 @@ value the score measured:
 This is an **inference, not a measurement**. It appears as a glyph and an
 explanation, never as a competing score. You can switch it off in the properties
 panel. It can't see script in include files, variables built from expressions, or
-automatic concatenation when a field list is `LOAD *`. When the viewer can't read
-the script, the app's own lineage statements are used where possible, and
-otherwise no glyph is shown.
+automatic concatenation when a field list is `LOAD *`.
+
+**When it can't tell, it says so.** Silence would read as "no changes", so a
+dataset the check couldn't answer for gets a grey **Couldn't check for script
+changes** notice in its drill-down instead, with the reason:
+
+- **The script couldn't be read.** Viewers often don't have permission to see it.
+- **Part of the script couldn't be followed.**
+- **The dataset isn't named in the script**, even though Qlik's lineage says the
+  app loads it (through a variable or an include file, say). Datasets that are
+  only in scope because they share a space stay quiet, since the app may not
+  load them at all.
+
+When the script can't be read but the app's own lineage statements can, those
+still show how each source was first read. A filter found there is reported as
+usual, with a note that later steps couldn't be checked. Finding nothing there
+counts as "couldn't check", never as "no changes". None of this puts a glyph on
+the tiles, the summary card's tooltip counts the datasets that couldn't be
+checked, and a failed check never stops the scores from loading.
 
 ## Performance
 
@@ -328,9 +384,10 @@ and a sort change went from 7 requests to none.
 
 ## The properties panel
 
-- **Button.** Panel title, icon source (built-in, Leonardo UI, or aggregate Trust
-  Score), then the icon or Leonardo name, button style, size and an optional icon
-  colour. Fields that don't apply to the chosen source are hidden.
+- **Button.** Panel title, what the button shows (a built-in or Leonardo UI icon,
+  the Trust Score ring, or the summary card), then the icon or Leonardo name, the
+  summary card's detail switches, button style, size and an optional icon colour.
+  Fields that don't apply to the chosen button are hidden.
 - **Trust score data.** Demo toggle, dataset scope, space id or dataset ids, sort
   order, max datasets shown, and the transformation-insights toggle.
 - **Access.** What to do when the viewer can't see Trust Scores (lock, hide, or
@@ -361,8 +418,9 @@ trust-score-flyout/
 
 Open `preview.html` in a browser (it needs internet access for the RequireJS CDN).
 It loads the real `component.js` in demo mode, the very same component the
-extension ships. Use the controls under the toolbar to switch between an icon and
-the aggregate score, change the style and size, and try the sort orders. Set
+extension ships. Use the controls under the toolbar to switch between an icon, the
+score ring and the summary card (with three card sizes to show how it adapts),
+change the style and size, and try the sort orders. Set
 **Viewer** to *no access* to see the locked or hidden button, and tick **Edit
 mode** to see how hide mode looks to an author. Once you've clicked a tile, the
 drill-down hint is remembered; **Show the hint again** brings it back.

@@ -5,8 +5,9 @@
  * being clipped). Manages open/close, data loading, the horizontal KPI list and
  * the animated drill-down detail view.
  *
- * The trigger is either an icon or, in "score" mode, a ring showing the
- * aggregate Trust Score across every scored dataset in scope.
+ * The trigger is an icon; in "score" mode a ring showing the aggregate Trust
+ * Score across every scored dataset in scope; or in "summary" mode a wider
+ * card with that ring plus counts, the recent change and the mix of scores.
  *
  * Access check: unless it is switched off (noAccess "show"), data loads as soon
  * as the object paints, as the viewing user, and the outcome decides whether
@@ -82,11 +83,11 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   }
 
   function scoreBand(v) {
-    if (v == null) return "na";
-    if (v >= 80) return "high";
-    if (v >= 60) return "mid";
-    if (v >= 40) return "low";
-    return "poor";
+    return dataAdapter.band(v);
+  }
+
+  function plural(n, word) {
+    return n + " " + word + (n === 1 ? "" : "s");
   }
 
   /** Swap the tsf-band--* class on an element (null clears it). */
@@ -123,6 +124,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       fields: {},              // field health per dataset id, fetched on demand
       data: null,
       aggregate: null,
+      summary: null,   // the summary card's details, over everything in scope
       visible: null,   // catalog datasets the viewer can see in scope (null = unknown)
       denied: false,   // last load was refused for lack of permission
       loading: false,
@@ -159,8 +161,9 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     // access check both need data on the sheet itself. Never re-fire on a plain
     // repaint while a load is running or after an error (the refresh button
     // retries those).
+    var mode = this.opts.iconMode;
     var wantsData =
-      this.state.open || this.opts.iconMode === "score" || this._checksAccess();
+      this.state.open || mode === "score" || mode === "summary" || this._checksAccess();
     var canLoad =
       !this.state.data && !this.state.loading && (dataChanged || !this.state.error);
     if (wantsData && canLoad) {
@@ -200,6 +203,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     this.state.data = null;
     this.state.fields = {};
     this.state.aggregate = null;
+    this.state.summary = null;
     this.state.visible = null;
     this.state.denied = false;
     this.state.loadedKey = null;
@@ -267,6 +271,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
     var o = this.opts;
     var t = this.trigger;
     var isScore = o.iconMode === "score";
+    var isSummary = o.iconMode === "summary";
     var status = this._accessStatus();
     var blocked = status === "denied" || status === "noDatasets";
     var hideMode = this._noAccessMode() === "hide";
@@ -278,21 +283,23 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       status === "checking" && hideMode && !o.editMode && !this._revealAnyway;
 
     this.host.classList.toggle("tsf-host--hidden", hidden);
+    this.host.classList.toggle("tsf-host--summary", isSummary);
     this._setPending(pending);
     t.classList.toggle("tsf-trigger--locked", blocked);
     t.classList.toggle("tsf-trigger--ghost", ghost);
     t.classList.toggle("tsf-trigger--score", isScore);
+    t.classList.toggle("tsf-trigger--summary", isSummary);
     t.classList.toggle("tsf-trigger--chip", o.triggerStyle === "chip");
     t.classList.toggle("tsf-trigger--bare", o.triggerStyle !== "chip");
     t.style.setProperty("--tsf-icon-size", (o.iconSize || 28) + "px");
 
     var label;
     if (blocked) {
-      label = this._renderLockedTrigger(status, isScore, ghost);
-    } else if (isScore) {
+      label = this._renderLockedTrigger(status, ghost);
+    } else if (isScore || isSummary) {
       // Colour comes from the score band, never from the icon colour.
       t.style.removeProperty("--tsf-icon-color");
-      label = this._renderScoreTrigger();
+      label = isScore ? this._renderScoreTrigger() : this._renderSummaryTrigger();
     } else {
       this._setTriggerHtml(this._iconHtml());
       t.classList.remove("tsf-trigger--loading");
@@ -365,38 +372,172 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
 
     setBand(t, band);
     t.classList.toggle("tsf-trigger--loading", loading);
-
-    // Animate the arc in only when the number actually changes, so routine
-    // repaints (resize, property edits) don't replay the fill.
-    var animate = rounded != null && rounded !== this._triggerScore;
-    this._setTriggerHtml(this._ring(animate ? 0 : score, text));
-    this._triggerScore = rounded;
-    if (animate) {
-      var arc = t.querySelector(".tsf-ring-arc");
-      var dash = ringDash(score);
-      requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-          if (arc) arc.setAttribute("stroke-dasharray", dash);
-        });
-      });
-    }
+    var self = this;
+    this._paintWithRing(score, function (v) {
+      return self._ring(v, text);
+    });
     return label;
   };
 
   /**
-   * The "no access" look: the configured icon faded with a padlock badge, or
-   * in score mode an empty ring with a padlock where the number would be.
+   * Write trigger markup that contains the score ring. `build(v)` returns the
+   * markup with the ring drawn at score v. The arc animates in only when the
+   * number actually changes, so routine repaints (resize, property edits)
+   * don't replay the fill, or anything else in the markup.
    */
-  Component.prototype._renderLockedTrigger = function (status, isScore, ghost) {
+  Component.prototype._paintWithRing = function (score, build) {
+    var rounded = score == null ? null : Math.round(score);
+    var animate = rounded != null && rounded !== this._triggerScore;
+    var html = build(score);
+    this._triggerScore = rounded;
+    if (!animate) {
+      this._setTriggerHtml(html);
+      return;
+    }
+    this._setTriggerHtml(build(0));
+    this._triggerHtml = html; // what the markup is about to become
+    var arc = this.trigger.querySelector(".tsf-ring-arc");
+    var dash = ringDash(score);
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        if (arc) arc.setAttribute("stroke-dasharray", dash);
+      });
+    });
+  };
+
+  /**
+   * The summary card: the aggregate ring, then the title with the change
+   * since the previous scores, how many datasets it covers and how many
+   * need attention, and the mix of scores as a bar. The ring carries the
+   * script-change badge, as the tiles do. Everything covers every scored
+   * dataset in scope, even when the flyout shows fewer. Each detail can be
+   * switched off, and the CSS drops them as the object gets smaller.
+   * Returns the tooltip / aria label.
+   */
+  Component.prototype._renderSummaryTrigger = function () {
+    var o = this.opts;
+    var s = this.state;
+    var t = this.trigger;
+    var title = o.title || "Trust Scores";
+    var agg = s.aggregate;
+    var sum = s.summary;
+    var score = agg && typeof agg.score === "number" ? agg.score : null;
+    var rounded = score == null ? null : Math.round(score);
+    var band = "na";
+    var text, meta, label;
+    var head = "";
+    var mix = "";
+    var badge = "";
+    var loading = false;
+
+    if (rounded != null) {
+      band = scoreBand(score);
+      text = String(rounded);
+      label = title + " · average " + rounded + " across " + plural(agg.count, "dataset");
+      meta = o.summaryCounts === false ? "" : "Average of " + plural(agg.count, "dataset");
+      if (sum && sum.attention) {
+        label += " · " + sum.attention + " below 60";
+        if (meta) {
+          meta +=
+            ' · <span class="tsf-sum-warn tsf-band--' + (sum.bands.poor ? "poor" : "low") + '">' +
+            sum.attention + (sum.attention === 1 ? " needs" : " need") + " attention</span>";
+        }
+      }
+      var d = sum && sum.change != null ? Math.round(sum.change) : 0;
+      if (d && o.summaryTrend !== false) {
+        var why = "Average " + (d > 0 ? "up " : "down ") + Math.abs(d) +
+          (Math.abs(d) === 1 ? " point" : " points") + " since the previous scores";
+        head =
+          '<span class="tsf-sum-delta tsf-delta--' + (d > 0 ? "up" : "down") + '" title="' + why + '">' +
+          (d > 0 ? "▲" : "▼") + Math.abs(d) + "</span>";
+        label += " · " + why.charAt(0).toLowerCase() + why.slice(1);
+      }
+      if (sum && sum.count && o.summaryMix !== false) {
+        var parts = [];
+        var segs = [
+          ["high", "80 or more"], ["mid", "60–79"], ["low", "40–59"], ["poor", "below 40"]
+        ].map(function (b) {
+          var n = sum.bands[b[0]];
+          if (!n) return "";
+          parts.push(n + " " + (b[0] === "poor" ? "" : "score ") + b[1]);
+          return '<span class="tsf-sum-seg tsf-band--' + b[0] + '" style="flex-grow:' + n + '"></span>';
+        }).join("");
+        mix = '<span class="tsf-sum-mix" title="' + escapeHtml(parts.join(" · ")) + '">' + segs + "</span>";
+      }
+      var changed = sum ? sum.script.critical + sum.script.alert : 0;
+      if (changed && o.summaryScript !== false) {
+        var worst = sum.script.critical ? "critical" : "alert";
+        var note = plural(changed, "dataset") + " changed by this app’s script";
+        badge = '<span class="tsf-tbadge tsf-tband--' + worst + '" title="' + escapeHtml(note) + '">' +
+          icons.glyph(worst) + "</span>";
+        label += " · " + note;
+      }
+      if (sum && sum.script.unknown && o.summaryScript !== false) {
+        label += " · couldn’t check script changes for " + plural(sum.script.unknown, "dataset");
+      }
+      if (s.visible != null && s.visible > agg.count) {
+        label += " · " + (s.visible - agg.count) + " more in scope not scored yet";
+      }
+    } else if (s.loading) {
+      text = "…";
+      loading = true;
+      meta = '<span class="tsf-sk tsf-sk-line tsf-sum-sk"></span>';
+      label = title + " · loading…";
+    } else if (s.error) {
+      text = "!";
+      meta = "Couldn’t load scores";
+      label = title + " · couldn’t load scores";
+    } else {
+      text = "–";
+      meta = "No scored datasets in scope";
+      label = title + " · no scored datasets in scope";
+    }
+
+    setBand(t, band);
+    t.classList.toggle("tsf-trigger--loading", loading);
+    var self = this;
+    this._paintWithRing(score, function (v) {
+      return self._summaryHtml(self._ring(v, text) + badge, head, meta, mix);
+    });
+    return label;
+  };
+
+  /** Summary card markup around a ring (trusted markup throughout). */
+  Component.prototype._summaryHtml = function (ringHtml, head, meta, mix) {
+    return (
+      '<span class="tsf-sum-ring">' + ringHtml + "</span>" +
+      '<span class="tsf-sum-text">' +
+      '<span class="tsf-sum-head"><span class="tsf-sum-title">' +
+      escapeHtml(this.opts.title || "Trust Scores") + "</span>" + (head || "") + "</span>" +
+      (meta ? '<span class="tsf-sum-meta">' + meta + "</span>" : "") +
+      (mix || "") +
+      "</span>" +
+      '<span class="tsf-sum-go" aria-hidden="true">' + icons.glyph("chevron") + "</span>"
+    );
+  };
+
+  /**
+   * The "no access" look: the configured icon faded with a padlock badge; in
+   * score mode an empty ring with a padlock where the number would be; and
+   * on the summary card that ring with the reason written beside it.
+   */
+  Component.prototype._renderLockedTrigger = function (status, ghost) {
+    var mode = this.opts.iconMode;
     var t = this.trigger;
     t.style.removeProperty("--tsf-icon-color");
     t.classList.remove("tsf-trigger--loading");
     setBand(t, "na");
     this._triggerScore = null;
     var lock = icons.glyph("lock");
-    this._setTriggerHtml(
-      isScore ? this._ring(null, null, lock) : this._iconHtml() + '<span class="tsf-lock">' + lock + "</span>"
-    );
+    var tip = ACCESS_TEXT[status].tip;
+    if (mode === "summary") {
+      this._setTriggerHtml(this._summaryHtml(
+        this._ring(null, null, lock), "", escapeHtml(tip.charAt(0).toUpperCase() + tip.slice(1)), ""));
+    } else if (mode === "score") {
+      this._setTriggerHtml(this._ring(null, null, lock));
+    } else {
+      this._setTriggerHtml(this._iconHtml() + '<span class="tsf-lock">' + lock + "</span>");
+    }
     var label = (this.opts.title || "Trust Scores") + " · " + ACCESS_TEXT[status].tip;
     if (ghost) label += " (hidden from viewers without access)";
     return label;
@@ -1018,6 +1159,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         self.state.loading = false;
         self.state.data = result.rows;
         self.state.aggregate = result.aggregate;
+        self.state.summary = result.summary || null;
         self.state.visible = typeof result.visible === "number" ? result.visible : null;
         self.state.loadedKey = key;
         self._render();
@@ -1029,6 +1171,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
         self.state.denied = dataAdapter.isDenied(err);
         self.state.data = null;
         self.state.aggregate = null;
+        self.state.summary = null;
         self._render();
       });
   };
@@ -1180,7 +1323,9 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   // Transformation-index glyph shown on the KPI card corner.
   Component.prototype._transformBadge = function (row) {
     var t = row.transformation;
-    if (!t || t.band === "none" || !t.reasons || !t.reasons.length) return "";
+    // "Couldn't check" is explained in the drill-down; a tile badge would
+    // sit on every tile whenever the script can't be read.
+    if (!t || t.band === "none" || t.band === "unknown" || !t.reasons || !t.reasons.length) return "";
     var labels = {
       info: "Worth knowing about this app’s data",
       alert: "Changed by this app’s script",
@@ -1335,6 +1480,7 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
   // "Does the parent score still apply here?" caveat, from transformation insights.
   Component.prototype._transformCallout = function (row) {
     var t = row.transformation;
+    if (t && t.band === "unknown") return this._unknownCallout(t);
     if (!t || t.band === "none" || !t.reasons || !t.reasons.length) return "";
     var headings = {
       info: "Worth knowing about this app’s data",
@@ -1358,6 +1504,41 @@ define(["./dataAdapter", "./icons"], function (dataAdapter, icons) {
       '<div class="tsf-callout-note">The Trust Score describes the source dataset. Here is ' +
       "how the data in this app differs from it, so read the score as a guide here.</div>" +
       '<ul class="tsf-reasons">' + reasons + "</ul>" +
+      (t.partial
+        ? '<div class="tsf-callout-partial">Only how this data was first read could be checked, ' +
+          "because this app’s load script couldn’t be read. Later steps may change it further.</div>"
+        : "") +
+      "</div>"
+    );
+  };
+
+  /**
+   * The script check couldn't answer for this dataset: a quiet grey notice
+   * saying so, and why, rather than staying silent (which reads as "no
+   * changes").
+   */
+  Component.prototype._unknownCallout = function (t) {
+    var why = {
+      script:
+        "This app’s load script couldn’t be read, so it isn’t known whether the app " +
+        "filters, joins or otherwise changes this dataset. Your account may not have " +
+        "permission to see the script.",
+      analysis:
+        "Part of this app’s load script couldn’t be followed, so it isn’t known " +
+        "whether the app filters, joins or otherwise changes this dataset.",
+      notFound:
+        "This dataset couldn’t be found in the app’s load script (it may be loaded " +
+        "through a variable or an include file), so it isn’t known whether the app " +
+        "changes it."
+    }[t.reason] ||
+      "It isn’t known whether this app’s script changes this dataset.";
+    return (
+      '<div class="tsf-callout tsf-tband--unknown" role="note">' +
+      '<div class="tsf-callout-head">' +
+      '<span class="tsf-callout-glyph">' + icons.glyph("unknown") + "</span>" +
+      '<span class="tsf-callout-title">Couldn’t check for script changes</span>' +
+      "</div>" +
+      '<div class="tsf-callout-note">' + escapeHtml(why) + "</div>" +
       "</div>"
     );
   };

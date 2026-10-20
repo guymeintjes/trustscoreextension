@@ -11,7 +11,9 @@ axis counts, how healthy each field is, a link straight to the dataset, and a he
 script reshapes the source enough that the score might not tell the whole story.
 
 If you'd rather not click at all, the button can show the **aggregate Trust Score**
-across all the datasets, drawn as the same colour-banded ring the flyout uses.
+across all the datasets, drawn as the same colour-banded ring the flyout uses. Or
+make it a **summary card**: that ring plus how many datasets it covers, how many
+need attention, which way the scores are moving and the mix of scores.
 And people who open the sheet without permission to see Trust Scores get a locked
 button, or no button at all, instead of an error.
 
