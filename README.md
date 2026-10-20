@@ -15,6 +15,10 @@ across all the datasets, drawn as the same colour-banded ring the flyout uses.
 And people who open the sheet without permission to see Trust Scores get a locked
 button, or no button at all, instead of an error.
 
+
+https://github.com/user-attachments/assets/3d60dc0b-2700-47aa-bf00-b38ad4f8c20e
+
+
 How it works, which APIs it calls and how to configure it all live in the
 [extension's own README](trust-score-flyout/README.md).
 
